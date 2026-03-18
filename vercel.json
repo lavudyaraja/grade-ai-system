@@ -40,11 +40,5 @@
   "installCommand": "npm install",
   "framework": "nextjs",
   "outputDirectory": ".next",
-  "regions": ["sin1"],
-  "provisioning": {
-    "database": {
-      "type": "postgresql",
-      "plan": "free"
-    }
-  }
+  "regions": ["sin1"]
 }
