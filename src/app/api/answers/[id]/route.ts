@@ -9,12 +9,14 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { handwrittenImagePath, recognizedText, confidenceLevel } = body;
+    const { handwrittenImagePath, recognizedText, confidenceLevel, teacherScore, teacherComment } = body;
 
     const updateData: Record<string, unknown> = {};
     if (handwrittenImagePath !== undefined) updateData.handwrittenImagePath = handwrittenImagePath;
     if (recognizedText !== undefined) updateData.recognizedText = recognizedText;
     if (confidenceLevel !== undefined) updateData.confidenceLevel = confidenceLevel;
+    if (teacherScore !== undefined) updateData.teacherScore = teacherScore;
+    if (teacherComment !== undefined) updateData.teacherComment = teacherComment;
 
     const answer = await db.answer.update({
       where: { id },

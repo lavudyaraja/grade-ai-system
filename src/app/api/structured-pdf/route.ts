@@ -139,12 +139,18 @@ async function extractPDF(pdfPath: string): Promise<{
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
-    pdfjsLib.GlobalWorkerOptions.workerSrc = null;
+    
+    // Configure PDF.js for server-side usage (no worker)
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '';
 
     const pdfBuffer = await readFile(pdfPath);
     const pdf = await pdfjsLib.getDocument({
       data: new Uint8Array(pdfBuffer),
       isEvalSupported: false,
+      useSystemFonts: true,
+      fontExtraProperties: false,
+      useWorkerFetch: false,
+      isOffscreenCanvasSupported: false,
     }).promise;
 
     const totalPages: number = pdf.numPages;

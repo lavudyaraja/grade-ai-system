@@ -31,12 +31,18 @@ export async function GET(
         const fs = require('fs');
         const pdfjsLib = require('pdfjs-dist');
         
-        // Set up worker
-        pdfjsLib.GlobalWorkerOptions.workerSrc = require('pdfjs-dist/build/pdf.worker.entry.js');
+        // Configure PDF.js for server-side usage (no worker)
+        pdfjsLib.GlobalWorkerOptions.workerSrc = '';
         
         // Read PDF file
         const pdfBuffer = await readFile(fullPath);
-        const loadingTask = pdfjsLib.getDocument({ data: pdfBuffer });
+        const loadingTask = pdfjsLib.getDocument({ 
+          data: pdfBuffer,
+          useSystemFonts: true,
+          fontExtraProperties: false,
+          useWorkerFetch: false,
+          isOffscreenCanvasSupported: false,
+        });
         const pdf = await loadingTask.promise;
         
         if (pdf.numPages > 0) {

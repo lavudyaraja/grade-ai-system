@@ -95,7 +95,7 @@ Teachers create exams, students upload handwritten answer sheets (as photos or P
 
 | Layer | Technology |
 |---|---|
-| **Framework** | Next.js 15+ (App Router) |
+| **Framework** | Next.js 16+ (App Router) |
 | **Language** | TypeScript 5 |
 | **Styling** | Tailwind CSS 4 + shadcn/ui |
 | **Icons** | Lucide React |
@@ -103,7 +103,7 @@ Teachers create exams, students upload handwritten answer sheets (as photos or P
 | **Database** | PostgreSQL 14+ |
 | **ORM** | Prisma |
 | **AI / OCR** | Groq SDK — Llama 4 Scout 17B Vision |
-| **PDF Rendering** | pdfjs-dist (legacy build) + node-canvas |
+| **PDF Rendering** | pdfjs-dist + node-canvas |
 | **Web Server** | Caddy (reverse proxy) |
 | **Runtime** | Node.js 18+ |
 
@@ -123,7 +123,7 @@ Teachers create exams, students upload handwritten answer sheets (as photos or P
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/lavudyaraja/grade-ai-system.git
 cd score_ai
 ```
 
@@ -131,6 +131,8 @@ cd score_ai
 
 ```bash
 npm install
+# or
+bun install  # Faster package manager
 ```
 
 > **Note:** `canvas` (used for PDF rendering) requires system libraries.
@@ -178,6 +180,8 @@ npm run db:migrate       # Production (with migration tracking)
 
 ```bash
 npm run dev
+# or
+bun run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
@@ -208,14 +212,28 @@ score_ai/
 │   │   │   ├── UploadTab.tsx       # File upload, OCR, submission creation
 │   │   │   ├── ExamsTab.tsx        # Exam creation and management
 │   │   │   ├── ResultsTab.tsx      # Grading results and review
+│   │   │   ├── ReviewTab.tsx       # Review queue management
 │   │   │   └── AnalyticsTab.tsx    # Class analytics dashboard
+│   │   ├── analytics/              # Analytics sub-components
+│   │   │   ├── OverviewTab.tsx     # Analytics overview
+│   │   │   ├── StudentsTab.tsx     # Student performance
+│   │   │   ├── QuestionsTab.tsx    # Question difficulty analysis
+│   │   │   ├── InsightsTab.tsx     # AI-generated insights
+│   │   │   ├── constants.ts        # Analytics constants and types
+│   │   │   └── components.tsx      # Shared analytics components
+│   │   ├── dialogs/                # Modal dialogs
+│   │   │   ├── ExamDialog.tsx      # Exam creation/editing
+│   │   │   ├── QuestionForm.tsx    # Question builder
+│   │   │   └── ExamMetaFields.tsx  # Exam metadata fields
 │   │   ├── ui/                     # shadcn/ui primitives
 │   │   ├── PDFPreview.tsx          # Embedded PDF viewer
 │   │   ├── PageWiseViewer.tsx      # Multi-page OCR result navigator
-│   │   └── FullScreenTextDialog.tsx
+│   │   ├── FullScreenTextDialog.tsx # Fullscreen text viewer
+│   │   └── ReviewPanel.tsx         # Review interface
 │   └── lib/
+│       ├── types/
+│       │   └── index.ts            # Centralized TypeScript types
 │       ├── db.ts                   # Prisma client singleton
-│       ├── types/                  # Shared TypeScript types
 │       └── utils.ts
 ├── prisma/
 │   └── schema.prisma
@@ -446,6 +464,11 @@ npm run dev          # Start with hot reload on :3000
 npm run lint         # ESLint check
 npm run build        # Production build
 npm run start        # Start production server
+# or with bun
+bun run dev
+bun run lint
+bun run build
+bun run start
 ```
 
 ### Database Commands
@@ -456,6 +479,12 @@ npm run db:push      # Push schema without migration history (dev)
 npm run db:migrate   # Create and apply migration (production)
 npm run db:reset     # Drop and recreate database (dev only)
 npm run db:studio    # Open Prisma Studio GUI
+# or with bun
+bun run db:generate
+bun run db:push
+bun run db:migrate
+bun run db:reset
+bun run db:studio
 ```
 
 ### Production with Caddy
@@ -473,6 +502,10 @@ your-domain.com {
 # Build and start
 npm run build
 NODE_ENV=production npm run start &
+caddy run --config Caddyfile
+# or with bun
+bun run build
+NODE_ENV=production bun run start &
 caddy run --config Caddyfile
 ```
 
@@ -511,6 +544,31 @@ CMD ["node", "server.js"]
 | `MAX_FILE_SIZE` | ❌ | `52428800` | Max upload size in bytes (50 MB) |
 | `NEXT_PUBLIC_APP_URL` | ❌ | `http://localhost:3000` | Public base URL |
 | `NEXTAUTH_SECRET` | ✅ | — | NextAuth session signing secret |
+
+---
+
+## 🆕 Recent Updates (v0.2.0)
+
+### ✨ New Features
+- **Enhanced Analytics Dashboard**: Complete overhaul with Overview, Students, Questions, and Insights tabs
+- **Review Queue Management**: Dedicated review workflow for AI-graded submissions
+- **Improved File Structure**: Better component organization with analytics sub-directory
+- **Centralized Type Definitions**: All TypeScript types moved to `src/lib/types/index.ts`
+- **Enhanced PDF Processing**: Better OCR accuracy and structured extraction
+- **Responsive UI Improvements**: Centered navigation tabs and improved mobile experience
+
+### 🔧 Technical Improvements
+- Updated to Next.js 16+ for better performance
+- Enhanced error handling and validation
+- Improved database schema with review workflow
+- Better component modularity and reusability
+- Optimized API endpoints for faster response times
+
+### 🐛 Bug Fixes
+- Fixed module resolution issues in analytics components
+- Resolved import path problems after component restructure
+- Improved file upload reliability
+- Better handling of large PDF files
 
 ---
 

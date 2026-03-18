@@ -54,18 +54,21 @@ model Question {
 
 // Student submission for an exam
 model Submission {
-  id           String   @id @default(cuid())
-  studentName  String
-  studentId    String?  // Roll number or student ID
-  submittedAt  DateTime @default(now())
-  status       String   @default("pending") // pending, processing, graded
-  totalScore   Float?   @default(0)
-  maxScore     Float?   @default(0)
-  percentage   Float?   @default(0)
-  feedback     String?  // Overall feedback
-  examId       String
-  exam         Exam     @relation(fields: [examId], references: [id])
-  answers      Answer[]
+  id                String   @id @default(cuid())
+  studentName       String
+  studentId         String?  // Roll number or student ID
+  submittedAt       DateTime @default(now())
+  status            String   @default("pending") // pending, processing, graded
+  totalScore        Float?   @default(0)
+  maxScore          Float?   @default(0)
+  percentage        Float?   @default(0)
+  feedback          String?  // Overall feedback
+  reviewStatus      String?  // pending | in_review | reviewed | disputed
+  reviewFinalizedAt DateTime?
+  reviewerNote      String?  // Reviewer's final note
+  examId            String
+  exam              Exam     @relation(fields: [examId], references: [id])
+  answers           Answer[]
 }
 
 // Individual answer from a student
@@ -86,6 +89,10 @@ model Answer {
   needsReview          Boolean  @default(false)
   reviewedAt           DateTime?
   reviewedBy           String?
+  teacherScore         Float?   // Teacher's overridden score
+  teacherComment       String?  // Teacher's comment on the answer
+  reviewDecision       String?  // 'accepted' | 'rejected' | 'disputed' | 'pending'
+  reviewNote           String?  // Internal review note
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
   questionId           String

@@ -1,424 +1,255 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import { Progress } from '@/components/ui/progress';
-import { Badge } from '@/components/ui/badge';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  LineChart,
-  Line,
-} from 'recharts';
-import {
-  TrendingUp,
-  Users,
-  FileText,
-  Award,
-  BarChart3,
-  Activity,
-} from 'lucide-react';
+import { BarChart3, Users, BookOpen, Brain, Download } from 'lucide-react';
 import type { Submission, Exam } from '@/lib/types';
 
-interface AnalyticsTabProps {
-  refreshTrigger?: number;
-}
+// ── Internal modules ──────────────────────────────────────────────────────────
+import { bandFor }      from '../analytics/constants';
+import type { QuestionStat } from '../analytics/constants';
+import OverviewTab      from '../analytics/OverviewTab';
+import StudentsTab      from '../analytics/StudentsTab';
+import QuestionsTab     from '../analytics/QuestionsTab';
+import InsightsTab      from '../analytics/InsightsTab';
 
-const COLORS = ['#22c55e', '#eab308', '#f97316', '#ef4444'];
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface AnalyticsTabProps { refreshTrigger?: number; }
 
+type TabId = 'overview' | 'students' | 'questions' | 'insights';
+
+const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
+  { id: 'overview',  label: 'Overview',  icon: BarChart3 },
+  { id: 'students',  label: 'Students',  icon: Users     },
+  { id: 'questions', label: 'Questions', icon: BookOpen  },
+  { id: 'insights',  label: 'Insights',  icon: Brain     },
+];
+
+// ── Component ─────────────────────────────────────────────────────────────────
 export default function AnalyticsTab({ refreshTrigger }: AnalyticsTabProps) {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [exams, setExams] = useState<Exam[]>([]);
-  const [selectedExamId, setSelectedExamId] = useState<string>('all');
-  const [loading, setLoading] = useState(true);
+  const [exams, setExams]             = useState<Exam[]>([]);
+  const [loading, setLoading]         = useState(true);
+  const [examFilter, setExamFilter]   = useState('all');
+  const [activeTab, setActiveTab]     = useState<TabId>('overview');
 
+  // ── Fetch ──────────────────────────────────────────────────────────────────
   useEffect(() => {
-    const fetchData = async () => {
+    (async () => {
       setLoading(true);
       try {
-        const [submissionsRes, examsRes] = await Promise.all([
+        const [sr, er] = await Promise.all([
           fetch('/api/submissions?status=graded'),
           fetch('/api/exams'),
         ]);
-
-        if (submissionsRes.ok && examsRes.ok) {
-          const [submissionsData, examsData] = await Promise.all([
-            submissionsRes.json(),
-            examsRes.json(),
-          ]);
-          setSubmissions(submissionsData);
-          setExams(examsData);
+        if (sr.ok && er.ok) {
+          setSubmissions(await sr.json());
+          setExams(await er.json());
         }
-      } catch (error) {
-        console.error('Error fetching data:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
+      } finally { setLoading(false); }
+    })();
   }, [refreshTrigger]);
 
-  const filteredSubmissions = selectedExamId === 'all'
-    ? submissions
-    : submissions.filter(s => s.examId === selectedExamId);
+  // ── Filtered graded submissions ────────────────────────────────────────────
+  const graded = useMemo(
+    () => (examFilter === 'all' ? submissions : submissions.filter(s => s.examId === examFilter))
+            .filter(s => s.status === 'graded'),
+    [submissions, examFilter],
+  );
 
-  // Calculate statistics
-  const totalSubmissions = filteredSubmissions.length;
-  const gradedSubmissions = filteredSubmissions.filter(s => s.status === 'graded').length;
-  const averageScore = gradedSubmissions > 0
-    ? filteredSubmissions.reduce((sum, s) => sum + (s.percentage || 0), 0) / gradedSubmissions
+  // ── Core stats (shared across tabs) ───────────────────────────────────────
+  const avg = graded.length
+    ? graded.reduce((a, s) => a + (s.percentage ?? 0), 0) / graded.length
     : 0;
-  const totalExams = exams.length;
 
-  // Score distribution
-  const scoreDistribution = [
-    { range: '80-100%', count: filteredSubmissions.filter(s => (s.percentage || 0) >= 80).length, color: COLORS[0] },
-    { range: '60-79%', count: filteredSubmissions.filter(s => (s.percentage || 0) >= 60 && (s.percentage || 0) < 80).length, color: COLORS[1] },
-    { range: '40-59%', count: filteredSubmissions.filter(s => (s.percentage || 0) >= 40 && (s.percentage || 0) < 60).length, color: COLORS[2] },
-    { range: '0-39%', count: filteredSubmissions.filter(s => (s.percentage || 0) < 40).length, color: COLORS[3] },
-  ];
+  const passRate = graded.length
+    ? (graded.filter(s => (s.percentage ?? 0) >= 40).length / graded.length) * 100
+    : 0;
 
-  // Question performance
-  const questionPerformance = selectedExamId !== 'all' 
-    ? (() => {
-        const examSubmissions = filteredSubmissions;
-        if (examSubmissions.length === 0) return [];
-        
-        const exam = exams.find(e => e.id === selectedExamId);
-        if (!exam) return [];
-        
-        return exam.questions.map(q => {
-          const answers = examSubmissions.flatMap(s => s.answers.filter(a => a.questionId === q.id));
-          const avgScore = answers.length > 0
-            ? answers.reduce((sum, a) => sum + (a.finalScore || 0), 0) / answers.length
-            : 0;
-          return {
-            name: `Q${q.questionNumber}`,
-            avgScore: avgScore.toFixed(1),
-            maxMarks: q.maxMarks,
-            percentage: q.maxMarks > 0 ? (avgScore / q.maxMarks) * 100 : 0,
-          };
-        });
-      })()
-    : [];
+  const highScore = graded.length ? Math.max(...graded.map(s => s.percentage ?? 0)) : 0;
+  const lowScore  = graded.length ? Math.min(...graded.map(s => s.percentage ?? 0)) : 0;
 
-  // Recent activity
-  const recentActivity = [...filteredSubmissions]
-    .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())
-    .slice(0, 5);
+  const median = useMemo(() => {
+    if (!graded.length) return 0;
+    const sorted = [...graded].map(s => s.percentage ?? 0).sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }, [graded]);
 
-  // Top performers
-  const topPerformers = [...filteredSubmissions]
-    .filter(s => s.status === 'graded')
-    .sort((a, b) => (b.percentage || 0) - (a.percentage || 0))
-    .slice(0, 5);
+  const stdDev = useMemo(() => {
+    if (graded.length < 2) return 0;
+    const variance = graded.reduce((sum, s) => sum + Math.pow((s.percentage ?? 0) - avg, 2), 0) / graded.length;
+    return Math.sqrt(variance);
+  }, [graded, avg]);
+
+  const needReview = graded.reduce(
+    (a, s) => a + (s.answers?.filter(x => x.needsReview).length ?? 0), 0,
+  );
+
+  // ── Spark / trend series ───────────────────────────────────────────────────
+  const recentScores = useMemo(() => {
+    const byDate: Record<string, number[]> = {};
+    [...graded]
+      .sort((a, b) => new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime())
+      .forEach(s => {
+        const d = new Date(s.submittedAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+        (byDate[d] ??= []).push(s.percentage ?? 0);
+      });
+    return Object.values(byDate).slice(-8).map(vals => vals.reduce((a, b) => a + b, 0) / vals.length);
+  }, [graded]);
+
+  // ── Question difficulty (used by Questions + Insights tabs) ───────────────
+  const questionDifficulty = useMemo((): QuestionStat[] => {
+    if (examFilter === 'all' || !graded.length) return [];
+    const exam = exams.find(e => e.id === examFilter);
+    if (!exam) return [];
+    return exam.questions.map(q => {
+      const answers  = graded.flatMap(s => s.answers?.filter(a => a.questionId === q.id) ?? []);
+      const avgScore = answers.length ? answers.reduce((a, x) => a + (x.finalScore ?? 0), 0)         / answers.length : 0;
+      const avgSim   = answers.length ? answers.reduce((a, x) => a + (x.similarityScore ?? 0), 0)    / answers.length : 0;
+      const avgKw    = answers.length ? answers.reduce((a, x) => a + (x.keywordScore ?? 0), 0)        / answers.length : 0;
+      const pct      = q.maxMarks > 0 ? (avgScore / q.maxMarks) * 100 : 0;
+      return {
+        name:       `Q${q.questionNumber}`,
+        fullName:   q.questionText?.slice(0, 50) ?? `Q${q.questionNumber}`,
+        avgScore:   parseFloat(avgScore.toFixed(1)),
+        maxMarks:   q.maxMarks,
+        percentage: parseFloat(pct.toFixed(1)),
+        similarity: parseFloat((avgSim * 100).toFixed(1)),
+        keyword:    parseFloat((avgKw  * 100).toFixed(1)),
+        attempts:   answers.length,
+        perfect:    answers.filter(x => (x.finalScore ?? 0) >= q.maxMarks).length,
+        zero:       answers.filter(x => (x.finalScore ?? 0) === 0).length,
+        difficulty: pct < 40 ? 'Hard' : pct < 70 ? 'Medium' : 'Easy',
+      };
+    });
+  }, [graded, exams, examFilter]);
+
+  // ── Loading skeleton ───────────────────────────────────────────────────────
+  if (loading) return (
+    <div className="space-y-5 animate-pulse">
+      <div className="flex justify-between">
+        <div className="h-8 w-40 bg-gray-100 rounded-xl" />
+        <div className="h-9 w-48 bg-gray-100 rounded-xl" />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="h-32 bg-gray-50 rounded-2xl border border-gray-100" />
+        ))}
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="h-64 bg-gray-50 rounded-2xl border border-gray-100" />
+        ))}
+      </div>
+    </div>
+  );
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6 font-sans">
+
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Analytics</h2>
-          <p className="text-muted-foreground">
-            Score distribution, statistics, and performance insights
+          <h2 className="text-2xl font-black tracking-tight text-gray-900">Analytics</h2>
+          <p className="text-sm text-gray-400 mt-0.5">
+            {graded.length} graded submission{graded.length !== 1 ? 's' : ''}
+            {examFilter !== 'all' && ` · ${exams.find(e => e.id === examFilter)?.title}`}
           </p>
         </div>
-        <Select value={selectedExamId} onValueChange={setSelectedExamId}>
-          <SelectTrigger className="w-[250px]">
-            <SelectValue placeholder="Filter by exam" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Exams</SelectItem>
-            {exams.map((exam) => (
-              <SelectItem key={exam.id} value={exam.id}>
-                {exam.title}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <Select value={examFilter} onValueChange={setExamFilter}>
+            <SelectTrigger className="h-9 w-52 bg-white border-gray-200 text-sm font-medium text-gray-700 rounded-xl shadow-none">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="bg-white border-gray-100 rounded-xl shadow-xl">
+              <SelectItem value="all" className="text-gray-700">All Exams</SelectItem>
+              {exams.map(e => (
+                <SelectItem key={e.id} value={e.id} className="text-gray-700">{e.title}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <button
+            className="h-9 w-9 flex items-center justify-center rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-50 transition"
+            title="Export data"
+          >
+            <Download className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
-      {loading ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          {[1, 2, 3, 4].map((i) => (
-            <Card key={i} className="animate-pulse">
-              <CardHeader className="pb-2">
-                <div className="h-4 bg-muted rounded w-1/2" />
-              </CardHeader>
-              <CardContent>
-                <div className="h-8 bg-muted rounded w-1/3" />
-              </CardContent>
-            </Card>
-          ))}
+      {/* ── Tab bar ─────────────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-1 border-b border-gray-100">
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setActiveTab(t.id)}
+            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all ${
+              activeTab === t.id
+                ? 'border-gray-900 text-gray-900'
+                : 'border-transparent text-gray-400 hover:text-gray-600'
+            }`}
+          >
+            <t.icon className="w-3.5 h-3.5" />
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Empty state ──────────────────────────────────────────────────────── */}
+      {graded.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-32 gap-4">
+          <div className="h-20 w-20 rounded-3xl bg-gray-50 border border-gray-100 flex items-center justify-center">
+            <BarChart3 className="h-9 w-9 text-gray-300" />
+          </div>
+          <div className="text-center">
+            <p className="text-sm font-semibold text-gray-600">No data yet</p>
+            <p className="text-xs text-gray-400 mt-1">Upload and grade submissions to see analytics</p>
+          </div>
         </div>
       ) : (
         <>
-          {/* Stats Cards */}
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium">Total Submissions</CardTitle>
-                <Users className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{totalSubmissions}</div>
-                <p className="text-xs text-muted-foreground">
-                  {gradedSubmissions} graded
-                </p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium">Average Score</CardTitle>
-                <TrendingUp className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{averageScore.toFixed(1)}%</div>
-                <Progress value={averageScore} className="h-2 mt-2" />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium">Total Exams</CardTitle>
-                <FileText className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{totalExams}</div>
-                <p className="text-xs text-muted-foreground">
-                  {exams.filter(e => e.status === 'active').length} active
-                </p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium">Pass Rate</CardTitle>
-                <Award className="h-4 w-4 text-muted-foreground" />
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {gradedSubmissions > 0
-                    ? ((filteredSubmissions.filter(s => (s.percentage || 0) >= 40).length / gradedSubmissions) * 100).toFixed(0)
-                    : 0}%
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  &gt;= 40% threshold
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Charts */}
-          <div className="grid gap-4 md:grid-cols-2">
-            {/* Score Distribution Pie Chart */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Score Distribution</CardTitle>
-                <CardDescription>Distribution of student scores</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {gradedSubmissions === 0 ? (
-                  <div className="flex items-center justify-center h-64 text-muted-foreground">
-                    No graded submissions yet
-                  </div>
-                ) : (
-                  <ResponsiveContainer width="100%" height={250}>
-                    <PieChart>
-                      <Pie
-                        data={scoreDistribution}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={80}
-                        fill="#8884d8"
-                        paddingAngle={5}
-                        dataKey="count"
-                        label={({ range, count }) => `${range}: ${count}`}
-                      >
-                        {scoreDistribution.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip />
-                    </PieChart>
-                  </ResponsiveContainer>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Score Distribution Bar Chart */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Score Ranges</CardTitle>
-                <CardDescription>Number of students in each score range</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {gradedSubmissions === 0 ? (
-                  <div className="flex items-center justify-center h-64 text-muted-foreground">
-                    No graded submissions yet
-                  </div>
-                ) : (
-                  <ResponsiveContainer width="100%" height={250}>
-                    <BarChart data={scoreDistribution}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="range" />
-                      <YAxis />
-                      <Tooltip />
-                      <Bar dataKey="count" fill="#8884d8" radius={[4, 4, 0, 0]}>
-                        {scoreDistribution.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Question Performance - only show when specific exam selected */}
-          {selectedExamId !== 'all' && questionPerformance.length > 0 && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Question Performance</CardTitle>
-                <CardDescription>Average score per question</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={questionPerformance}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" />
-                    <YAxis />
-                    <Tooltip />
-                    <Bar dataKey="avgScore" fill="#3b82f6" name="Average Score" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                  {questionPerformance.map((q, i) => (
-                    <div key={i} className="p-3 bg-muted/50 rounded-lg">
-                      <p className="text-sm font-medium">{q.name}</p>
-                      <p className="text-lg font-bold">{q.avgScore} / {q.maxMarks}</p>
-                      <Progress value={q.percentage} className="h-2 mt-1" />
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+          {activeTab === 'overview' && (
+            <OverviewTab
+              graded={graded}
+              exams={exams}
+              avg={avg}
+              passRate={passRate}
+              highScore={highScore}
+              lowScore={lowScore}
+              median={median}
+              stdDev={stdDev}
+              needReview={needReview}
+              recentScores={recentScores}
+            />
           )}
 
-          {/* Bottom Section */}
-          <div className="grid gap-4 md:grid-cols-2">
-            {/* Top Performers */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Award className="h-5 w-5 text-yellow-500" />
-                  Top Performers
-                </CardTitle>
-                <CardDescription>Highest scoring students</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {topPerformers.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No graded submissions yet
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {topPerformers.map((submission, index) => (
-                      <div key={submission.id} className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-                            index === 0 ? 'bg-yellow-100 text-yellow-700' :
-                            index === 1 ? 'bg-gray-100 text-gray-700' :
-                            index === 2 ? 'bg-orange-100 text-orange-700' :
-                            'bg-muted text-muted-foreground'
-                          }`}>
-                            {index + 1}
-                          </div>
-                          <div>
-                            <p className="font-medium">{submission.studentName}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {submission.exam?.title}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-bold">{submission.percentage?.toFixed(1)}%</p>
-                          <p className="text-xs text-muted-foreground">
-                            {submission.totalScore?.toFixed(1)} / {submission.maxScore?.toFixed(0)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+          {activeTab === 'students' && (
+            <StudentsTab graded={graded} />
+          )}
 
-            {/* Recent Activity */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Activity className="h-5 w-5 text-blue-500" />
-                  Recent Activity
-                </CardTitle>
-                <CardDescription>Latest submissions</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {recentActivity.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No submissions yet
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {recentActivity.map((submission) => (
-                      <div key={submission.id} className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
-                            <Users className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                          <div>
-                            <p className="font-medium">{submission.studentName}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {submission.exam?.title}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <Badge variant={submission.status === 'graded' ? 'default' : 'secondary'}>
-                            {submission.status}
-                          </Badge>
-                          <p className="text-xs text-muted-foreground mt-1">
-                            {new Date(submission.submittedAt).toLocaleDateString()}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+          {activeTab === 'questions' && (
+            <QuestionsTab
+              examFilter={examFilter}
+              questionDifficulty={questionDifficulty}
+            />
+          )}
+
+          {activeTab === 'insights' && (
+            <InsightsTab
+              graded={graded}
+              avg={avg}
+              median={median}
+              stdDev={stdDev}
+              passRate={passRate}
+              highScore={highScore}
+              lowScore={lowScore}
+              needReview={needReview}
+              questionDifficulty={questionDifficulty}
+            />
+          )}
         </>
       )}
     </div>

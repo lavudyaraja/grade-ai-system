@@ -60,6 +60,10 @@ export interface Answer {
   needsReview: boolean;
   reviewedAt: string | null;
   reviewedBy: string | null;
+  teacherScore: number | null;
+  teacherComment: string | null;
+  reviewDecision: string | null; // 'accepted' | 'rejected' | 'disputed' | 'pending'
+  reviewNote: string | null;
   createdAt: string;
   updatedAt: string;
   questionId: string;
@@ -77,6 +81,9 @@ export interface Submission {
   maxScore: number | null;
   percentage: number | null;
   feedback: string | null;
+  reviewStatus: string | null; // pending | in_review | reviewed | disputed
+  reviewFinalizedAt: string | null;
+  reviewerNote: string | null;
   examId: string;
   exam?: Exam;
   answers: Answer[];

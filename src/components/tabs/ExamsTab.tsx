@@ -1,608 +1,497 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
+import { useState, useEffect, useMemo } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
+import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@/components/ui/select';
 import {
-  Plus,
-  Pencil,
-  Trash2,
-  BookOpen,
-  FileQuestion,
-  Users,
-  MoreVertical,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  Plus, Pencil, Trash2, BookOpen, FileQuestion, Users, Search,
+  Copy, ToggleLeft, ToggleRight, ChevronDown, ChevronUp, Eye,
+  Loader2, Filter, SortAsc,
 } from 'lucide-react';
 import type { Exam, QuestionFormData } from '@/lib/types';
+import ExamDialog from '../dialogs/ExamDialog';
 
 interface ExamsTabProps {
   teacherId: string;
   onExamCreated?: () => void;
 }
 
+type SortKey = 'title' | 'createdAt' | 'totalMarks';
+type StatusFilter = 'all' | 'draft' | 'active' | 'graded' | 'archived';
+
+const STATUS_CONFIG: Record<string, { dot: string; text: string; badge: string }> = {
+  draft:    { dot: 'bg-slate-500',  text: 'text-slate-400',  badge: 'bg-slate-500/10 text-slate-400 border-slate-500/20' },
+  active:   { dot: 'bg-emerald-400',text: 'text-emerald-400',badge: 'bg-emerald-400/10 text-emerald-400 border-emerald-400/20' },
+  graded:   { dot: 'bg-blue-400',   text: 'text-blue-400',   badge: 'bg-blue-400/10 text-blue-400 border-blue-400/20' },
+  archived: { dot: 'bg-orange-400', text: 'text-orange-400', badge: 'bg-orange-400/10 text-orange-400 border-orange-400/20' },
+};
+
+const EMPTY_QUESTION = (): QuestionFormData => ({
+  questionNumber: 1,
+  questionText: '',
+  modelAnswer: '',
+  maxMarks: 10,
+  keywords: [],
+  gradingNotes: '',
+});
+
 export default function ExamsTab({ teacherId, onExamCreated }: ExamsTabProps) {
-  const [exams, setExams] = useState<Exam[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [isEditOpen, setIsEditOpen] = useState(false);
-  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-  const [selectedExam, setSelectedExam] = useState<Exam | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [exams, setExams]                     = useState<Exam[]>([]);
+  const [loading, setLoading]                 = useState(true);
+  const [submitting, setSubmitting]           = useState(false);
 
-  // Form state
-  const [title, setTitle] = useState('');
-  const [subject, setSubject] = useState('');
-  const [description, setDescription] = useState('');
-  const [questions, setQuestions] = useState<QuestionFormData[]>([
-    { questionNumber: 1, questionText: '', modelAnswer: '', maxMarks: 10, keywords: [], gradingNotes: '' }
-  ]);
+  // ── UI state ────────────────────────────────────────────────────
+  const [createOpen, setCreateOpen]           = useState(false);
+  const [editOpen, setEditOpen]               = useState(false);
+  const [deleteOpen, setDeleteOpen]           = useState(false);
+  const [previewOpen, setPreviewOpen]         = useState(false);
+  const [selectedExam, setSelectedExam]       = useState<Exam | null>(null);
 
+  // ── Filter / sort ────────────────────────────────────────────────
+  const [search, setSearch]                   = useState('');
+  const [statusFilter, setStatusFilter]       = useState<StatusFilter>('all');
+  const [sortKey, setSortKey]                 = useState<SortKey>('createdAt');
+  const [expandedQuestions, setExpandedQ]     = useState<Record<string, boolean>>({});
+
+  // ── Form state ───────────────────────────────────────────────────
+  const [title, setTitle]                     = useState('');
+  const [subject, setSubject]                 = useState('');
+  const [description, setDescription]         = useState('');
+  const [status, setStatus]                   = useState<'draft'|'active'>('draft');
+  const [questions, setQuestions]             = useState<QuestionFormData[]>([EMPTY_QUESTION()]);
+
+  // ── Fetch ────────────────────────────────────────────────────────
   const fetchExams = async () => {
     try {
-      const response = await fetch('/api/exams');
-      if (response.ok) {
-        const data = await response.json();
-        setExams(data);
-      }
-    } catch (error) {
-      console.error('Error fetching exams:', error);
-    } finally {
-      setLoading(false);
-    }
+      const res = await fetch('/api/exams');
+      if (res.ok) setExams(await res.json());
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
   };
 
-  useEffect(() => {
-    fetchExams();
-  }, []);
+  useEffect(() => { fetchExams(); }, []);
 
+  // ── Derived list ─────────────────────────────────────────────────
+  const filtered = useMemo(() => {
+    let list = exams.filter(e => {
+      const q = search.toLowerCase();
+      return (
+        e.title.toLowerCase().includes(q) ||
+        e.subject.toLowerCase().includes(q) ||
+        (e.description ?? '').toLowerCase().includes(q)
+      );
+    });
+    if (statusFilter !== 'all') list = list.filter(e => e.status === statusFilter);
+    list = [...list].sort((a, b) => {
+      if (sortKey === 'title')      return a.title.localeCompare(b.title);
+      if (sortKey === 'totalMarks') return b.totalMarks - a.totalMarks;
+      return new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime();
+    });
+    return list;
+  }, [exams, search, statusFilter, sortKey]);
+
+  // ── Helpers ───────────────────────────────────────────────────────
   const resetForm = () => {
-    setTitle('');
-    setSubject('');
-    setDescription('');
-    setQuestions([
-      { questionNumber: 1, questionText: '', modelAnswer: '', maxMarks: 10, keywords: [], gradingNotes: '' }
-    ]);
+    setTitle(''); setSubject(''); setDescription(''); setStatus('draft');
+    setQuestions([EMPTY_QUESTION()]);
   };
 
-  const handleCreateExam = async () => {
-    if (!title || !subject) {
-      alert('Please fill in title and subject');
-      return;
-    }
+  const loadExamIntoForm = (exam: Exam) => {
+    setTitle(exam.title);
+    setSubject(exam.subject);
+    setDescription(exam.description ?? '');
+    setStatus(exam.status === 'active' ? 'active' : 'draft');
+    setQuestions(
+      exam.questions.map(q => ({
+        questionNumber: q.questionNumber,
+        questionText:   q.questionText,
+        modelAnswer:    q.modelAnswer,
+        maxMarks:       q.maxMarks,
+        keywords:       q.keywords ? JSON.parse(q.keywords) : [],
+        gradingNotes:   q.gradingNotes ?? '',
+      }))
+    );
+  };
 
+  const totalMarks = questions.reduce((s, q) => s + (q.maxMarks || 0), 0);
+
+  const addQuestion = () =>
+    setQuestions(prev => [
+      ...prev,
+      { ...EMPTY_QUESTION(), questionNumber: prev.length + 1 },
+    ]);
+
+  const removeQuestion = (i: number) => {
+    if (questions.length <= 1) return;
+    setQuestions(prev =>
+      prev.filter((_, idx) => idx !== i).map((q, idx) => ({ ...q, questionNumber: idx + 1 }))
+    );
+  };
+
+  const updateQ = (i: number, field: keyof QuestionFormData, val: unknown) =>
+    setQuestions(prev => prev.map((q, idx) => idx === i ? { ...q, [field]: val } : q));
+
+  // ── API calls ─────────────────────────────────────────────────────
+  const handleCreate = async () => {
+    if (!title.trim() || !subject.trim()) return alert('Title and subject are required.');
     setSubmitting(true);
     try {
-      const response = await fetch('/api/exams', {
+      const res = await fetch('/api/exams', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title,
-          subject,
-          description,
-          teacherId,
+          title, subject, description, teacherId, status,
           questions: questions.filter(q => q.questionText && q.modelAnswer),
         }),
       });
-
-      if (response.ok) {
-        await fetchExams();
-        setIsCreateOpen(false);
-        resetForm();
-        onExamCreated?.();
-      } else {
-        const error = await response.json();
-        alert(error.error || 'Failed to create exam');
-      }
-    } catch (error) {
-      console.error('Error creating exam:', error);
-      alert('Failed to create exam');
-    } finally {
-      setSubmitting(false);
-    }
+      if (res.ok) {
+        await fetchExams(); setCreateOpen(false); resetForm(); onExamCreated?.();
+      } else { alert((await res.json()).error ?? 'Failed to create exam'); }
+    } finally { setSubmitting(false); }
   };
 
-  const handleUpdateExam = async () => {
-    if (!selectedExam || !title || !subject) {
-      alert('Please fill in title and subject');
-      return;
-    }
-
+  const handleUpdate = async () => {
+    if (!selectedExam || !title.trim() || !subject.trim()) return;
     setSubmitting(true);
     try {
-      const response = await fetch(`/api/exams/${selectedExam.id}`, {
+      const res = await fetch(`/api/exams/${selectedExam.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title,
-          subject,
-          description,
+          title, subject, description, status,
           questions: questions.filter(q => q.questionText && q.modelAnswer),
         }),
       });
-
-      if (response.ok) {
-        await fetchExams();
-        setIsEditOpen(false);
-        setSelectedExam(null);
-        resetForm();
-      } else {
-        const error = await response.json();
-        alert(error.error || 'Failed to update exam');
-      }
-    } catch (error) {
-      console.error('Error updating exam:', error);
-      alert('Failed to update exam');
-    } finally {
-      setSubmitting(false);
-    }
+      if (res.ok) { await fetchExams(); setEditOpen(false); setSelectedExam(null); resetForm(); }
+      else alert((await res.json()).error ?? 'Failed to update');
+    } finally { setSubmitting(false); }
   };
 
-  const handleDeleteExam = async () => {
+  const handleDelete = async () => {
     if (!selectedExam) return;
-
     setSubmitting(true);
     try {
-      const response = await fetch(`/api/exams/${selectedExam.id}`, {
-        method: 'DELETE',
+      const res = await fetch(`/api/exams/${selectedExam.id}`, { method: 'DELETE' });
+      if (res.ok) { await fetchExams(); setDeleteOpen(false); setSelectedExam(null); }
+      else alert((await res.json()).error ?? 'Failed to delete');
+    } finally { setSubmitting(false); }
+  };
+
+  const handleDuplicate = async (exam: Exam) => {
+    try {
+      const res = await fetch('/api/exams', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title:       `${exam.title} (Copy)`,
+          subject:     exam.subject,
+          description: exam.description,
+          teacherId,
+          status:      'draft',
+          questions:   exam.questions.map(q => ({
+            questionNumber: q.questionNumber,
+            questionText:   q.questionText,
+            modelAnswer:    q.modelAnswer,
+            maxMarks:       q.maxMarks,
+            keywords:       q.keywords ? JSON.parse(q.keywords) : [],
+            gradingNotes:   q.gradingNotes ?? '',
+          })),
+        }),
       });
-
-      if (response.ok) {
-        await fetchExams();
-        setIsDeleteOpen(false);
-        setSelectedExam(null);
-      } else {
-        const error = await response.json();
-        alert(error.error || 'Failed to delete exam');
-      }
-    } catch (error) {
-      console.error('Error deleting exam:', error);
-      alert('Failed to delete exam');
-    } finally {
-      setSubmitting(false);
-    }
+      if (res.ok) { await fetchExams(); onExamCreated?.(); }
+    } catch (e) { console.error(e); }
   };
 
-  const openEditDialog = (exam: Exam) => {
-    setSelectedExam(exam);
-    setTitle(exam.title);
-    setSubject(exam.subject);
-    setDescription(exam.description || '');
-    setQuestions(exam.questions.map(q => ({
-      questionNumber: q.questionNumber,
-      questionText: q.questionText,
-      modelAnswer: q.modelAnswer,
-      maxMarks: q.maxMarks,
-      keywords: q.keywords ? JSON.parse(q.keywords) : [],
-      gradingNotes: q.gradingNotes || '',
-    })));
-    setIsEditOpen(true);
+  const handleToggleStatus = async (exam: Exam) => {
+    const next = exam.status === 'active' ? 'draft' : 'active';
+    try {
+      const res = await fetch(`/api/exams/${exam.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: next }),
+      });
+      if (res.ok) await fetchExams();
+    } catch (e) { console.error(e); }
   };
 
-  const openDeleteDialog = (exam: Exam) => {
-    setSelectedExam(exam);
-    setIsDeleteOpen(true);
-  };
-
-  const addQuestion = () => {
-    setQuestions([
-      ...questions,
-      {
-        questionNumber: questions.length + 1,
-        questionText: '',
-        modelAnswer: '',
-        maxMarks: 10,
-        keywords: [],
-        gradingNotes: '',
-      },
-    ]);
-  };
-
-  const removeQuestion = (index: number) => {
-    if (questions.length > 1) {
-      setQuestions(questions.filter((_, i) => i !== index));
-    }
-  };
-
-  const updateQuestion = (index: number, field: keyof QuestionFormData, value: unknown) => {
-    const updated = [...questions];
-    updated[index] = { ...updated[index], [field]: value };
-    setQuestions(updated);
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'active':
-        return 'bg-green-500';
-      case 'graded':
-        return 'bg-blue-500';
-      default:
-        return 'bg-gray-500';
-    }
-  };
-
-  const totalMarks = questions.reduce((sum, q) => sum + q.maxMarks, 0);
-
+  // ── Render ────────────────────────────────────────────────────────
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-5">
+      {/* Page header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Exams</h2>
-          <p className="text-muted-foreground">
-            Create and manage exams with questions and model answers
-          </p>
+          <h2 className="text-xl font-bold text-gray-900">Exams</h2>
+          <p className="text-sm text-gray-600 mt-0.5">Create and manage exam papers with model answers</p>
         </div>
-        <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-          <DialogTrigger asChild>
-            <Button onClick={() => { resetForm(); setIsCreateOpen(true); }}>
-              <Plus className="mr-2 h-4 w-4" />
-              Create Exam
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-3xl grid-rows-[auto_1fr_auto] max-h-[90vh] p-0 gap-0">
-            <DialogHeader className="p-6 pb-0">
-              <DialogTitle>Create New Exam</DialogTitle>
-              <DialogDescription>
-                Add exam details and questions with model answers for grading
-              </DialogDescription>
-            </DialogHeader>
-            <div className="overflow-y-auto px-6 py-4 max-h-[60vh]">
-              <div className="grid gap-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="title">Exam Title *</Label>
-                    <Input
-                      id="title"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      placeholder="e.g., Midterm Exam 2024"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="subject">Subject *</Label>
-                    <Input
-                      id="subject"
-                      value={subject}
-                      onChange={(e) => setSubject(e.target.value)}
-                      placeholder="e.g., Mathematics"
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="description">Description</Label>
-                  <Textarea
-                    id="description"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Optional description of the exam..."
-                    rows={2}
-                  />
-                </div>
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <Label>Questions (Total: {totalMarks} marks)</Label>
-                    <Button variant="outline" size="sm" onClick={addQuestion}>
-                      <Plus className="mr-1 h-3 w-3" />
-                      Add Question
-                    </Button>
-                  </div>
-                  {questions.map((q, index) => (
-                    <Card key={index}>
-                      <CardHeader className="pb-2">
-                        <div className="flex items-center justify-between">
-                          <CardTitle className="text-base">Question {q.questionNumber}</CardTitle>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => removeQuestion(index)}
-                            disabled={questions.length === 1}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="space-y-3">
-                        <div className="space-y-2">
-                          <Label>Question Text *</Label>
-                          <Textarea
-                            value={q.questionText}
-                            onChange={(e) => updateQuestion(index, 'questionText', e.target.value)}
-                            placeholder="Enter the question..."
-                            rows={2}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Model Answer *</Label>
-                          <Textarea
-                            value={q.modelAnswer}
-                            onChange={(e) => updateQuestion(index, 'modelAnswer', e.target.value)}
-                            placeholder="Enter the expected answer for grading..."
-                            rows={3}
-                          />
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="space-y-2">
-                            <Label>Max Marks</Label>
-                            <Input
-                              type="number"
-                              value={q.maxMarks}
-                              onChange={(e) => updateQuestion(index, 'maxMarks', parseFloat(e.target.value) || 0)}
-                              min={0}
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>Keywords (comma-separated)</Label>
-                            <Input
-                              value={q.keywords?.join(', ') || ''}
-                              onChange={(e) => updateQuestion(index, 'keywords', e.target.value.split(',').map(k => k.trim()).filter(Boolean))}
-                              placeholder="keyword1, keyword2"
-                            />
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <DialogFooter className="p-6 pt-4 border-t bg-background">
-              <Button variant="outline" onClick={() => setIsCreateOpen(false)}>
-                Cancel
-              </Button>
-              <Button onClick={handleCreateExam} disabled={submitting}>
-                {submitting ? 'Creating...' : 'Create Exam'}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <Button
+          onClick={() => { resetForm(); setCreateOpen(true); }}
+          className="bg-amber-400 hover:bg-amber-300 text-black font-semibold text-sm h-9 self-start sm:self-auto"
+        >
+          <Plus className="h-4 w-4 mr-1.5" />
+          New Exam
+        </Button>
       </div>
 
+      {/* Filters bar */}
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-500" />
+          <Input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search exams…"
+            className="pl-8 h-9 bg-white border-gray-300 text-gray-800 text-sm focus:border-amber-400/40 placeholder:text-gray-400"
+          />
+        </div>
+        <Select value={statusFilter} onValueChange={(v: StatusFilter) => setStatusFilter(v)}>
+          <SelectTrigger className="h-9 w-36 bg-white border-gray-300 text-gray-700 text-sm">
+            <Filter className="h-3.5 w-3.5 mr-1.5 text-gray-500" />
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="bg-white border-gray-200">
+            {['all','draft','active','graded','archived'].map(s => (
+              <SelectItem key={s} value={s} className="text-gray-700 capitalize">{s === 'all' ? 'All Status' : s}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={sortKey} onValueChange={(v: SortKey) => setSortKey(v)}>
+          <SelectTrigger className="h-9 w-36 bg-white border-gray-300 text-gray-700 text-sm">
+            <SortAsc className="h-3.5 w-3.5 mr-1.5 text-gray-500" />
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="bg-white border-gray-200">
+            <SelectItem value="createdAt" className="text-gray-700">Newest</SelectItem>
+            <SelectItem value="title" className="text-gray-700">A → Z</SelectItem>
+            <SelectItem value="totalMarks" className="text-gray-700">Most marks</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Count */}
+      {!loading && (
+        <p className="text-[11px] text-gray-500 font-mono">
+          {filtered.length} exam{filtered.length !== 1 ? 's' : ''} found
+        </p>
+      )}
+
+      {/* Grid */}
       {loading ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {[1, 2, 3].map((i) => (
-            <Card key={i} className="animate-pulse">
-              <CardHeader>
-                <div className="h-4 bg-muted rounded w-2/3" />
-                <div className="h-3 bg-muted rounded w-1/2" />
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  <div className="h-3 bg-muted rounded" />
-                  <div className="h-3 bg-muted rounded w-2/3" />
-                </div>
-              </CardContent>
-            </Card>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {[1,2,3].map(i => (
+            <div key={i} className="rounded-xl border border-gray-200 bg-gray-50 p-5 animate-pulse space-y-3">
+              <div className="h-4 bg-gray-200 rounded w-2/3" />
+              <div className="h-3 bg-gray-200 rounded w-1/2" />
+              <div className="h-3 bg-gray-200 rounded" />
+            </div>
           ))}
         </div>
-      ) : exams.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <BookOpen className="h-12 w-12 text-muted-foreground mb-4" />
-            <p className="text-lg font-medium mb-2">No exams yet</p>
-            <p className="text-muted-foreground text-sm mb-4">
-              Create your first exam to start grading handwritten submissions
+      ) : filtered.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-20 gap-4">
+          <div className="h-16 w-16 rounded-2xl bg-gray-50 border border-gray-200 flex items-center justify-center">
+            <BookOpen className="h-8 w-8 text-gray-400" />
+          </div>
+          <div className="text-center">
+            <p className="text-base font-semibold text-gray-600">
+              {search || statusFilter !== 'all' ? 'No exams match your filters' : 'No exams yet'}
             </p>
-            <Button onClick={() => setIsCreateOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Create First Exam
+            <p className="text-sm text-gray-500 mt-1">
+              {search || statusFilter !== 'all'
+                ? 'Try adjusting search or filters'
+                : 'Create your first exam to get started'}
+            </p>
+          </div>
+          {!search && statusFilter === 'all' && (
+            <Button
+              onClick={() => { resetForm(); setCreateOpen(true); }}
+              className="bg-amber-400 hover:bg-amber-300 text-black font-semibold text-sm h-9 mt-1"
+            >
+              <Plus className="h-4 w-4 mr-1.5" /> Create First Exam
             </Button>
-          </CardContent>
-        </Card>
+          )}
+        </div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {exams.map((exam) => (
-            <Card key={exam.id} className="hover:shadow-md transition-shadow">
-              <CardHeader className="pb-3">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg">{exam.title}</CardTitle>
-                    <CardDescription>{exam.subject}</CardDescription>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {filtered.map(exam => {
+            const cfg = STATUS_CONFIG[exam.status] ?? STATUS_CONFIG.draft;
+            return (
+              <div
+                key={exam.id}
+                className="group rounded-xl border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 transition-all duration-150 flex flex-col overflow-hidden"
+              >
+                {/* Card header */}
+                <div className="p-4 pb-3 flex-1">
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="font-semibold text-gray-900 text-sm truncate">{exam.title}</h3>
+                      <p className="text-xs text-gray-600 truncate">{exam.subject}</p>
+                    </div>
+                    <Badge className={`text-[10px] flex-shrink-0 border ${cfg.badge} capitalize gap-1`}>
+                      <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`} />
+                      {exam.status}
+                    </Badge>
                   </div>
-                  <Badge variant="secondary" className="capitalize">
-                    <span className={`mr-1.5 h-2 w-2 rounded-full ${getStatusColor(exam.status)}`} />
-                    {exam.status}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground mb-4 line-clamp-2">
-                  {exam.description || 'No description provided'}
-                </p>
-                <div className="flex items-center gap-4 text-sm text-muted-foreground mb-4">
-                  <div className="flex items-center gap-1">
-                    <FileQuestion className="h-4 w-4" />
-                    <span>{exam.questions?.length || 0} questions</span>
+
+                  {exam.description && (
+                    <p className="text-xs text-gray-600 line-clamp-2 mb-3">{exam.description}</p>
+                  )}
+
+                  {/* Stats row */}
+                  <div className="flex items-center gap-3 text-xs text-gray-500">
+                    <span className="flex items-center gap-1">
+                      <FileQuestion className="h-3 w-3" />
+                      {exam.questions?.length ?? 0}
+                      <span className="text-gray-600">q</span>
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Users className="h-3 w-3" />
+                      {exam._count?.submissions ?? 0}
+                      <span className="text-gray-600">sub</span>
+                    </span>
+                    <span className="ml-auto font-mono text-amber-600 text-[11px]">
+                      {exam.totalMarks}m
+                    </span>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <Users className="h-4 w-4" />
-                    <span>{exam._count?.submissions || 0} submissions</span>
+                </div>
+
+                {/* Question keyword pills */}
+                {exam.questions?.length > 0 && (
+                  <div className="px-4 pb-3 flex flex-wrap gap-1">
+                    {exam.questions.slice(0, 3).map((q, i) => (
+                      <span
+                        key={i}
+                        className="text-[10px] font-mono bg-gray-100 border border-gray-200 px-1.5 py-0.5 rounded text-gray-600 truncate max-w-[120px]"
+                      >
+                        Q{q.questionNumber}: {q.questionText.substring(0, 20)}{q.questionText.length > 20 ? '…' : ''}
+                      </span>
+                    ))}
+                    {exam.questions.length > 3 && (
+                      <span className="text-[10px] text-gray-500">+{exam.questions.length - 3} more</span>
+                    )}
                   </div>
-                </div>
-                <div className="flex items-center justify-between text-sm font-medium">
-                  <span>Total Marks: {exam.totalMarks}</span>
-                </div>
-                <div className="flex gap-2 mt-4">
+                )}
+
+                {/* Actions */}
+                <div className="border-t border-gray-200 px-3 py-2 flex items-center gap-1">
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     size="sm"
-                    onClick={() => openEditDialog(exam)}
-                    className="flex-1"
+                    onClick={() => { setSelectedExam(exam); setPreviewOpen(true); }}
+                    className="h-7 px-2 text-[11px] text-gray-500 hover:text-gray-700 hover:bg-gray-100 gap-1"
                   >
-                    <Pencil className="mr-1 h-3 w-3" />
-                    Edit
+                    <Eye className="h-3 w-3" /> Preview
                   </Button>
                   <Button
-                    variant="outline"
+                    variant="ghost"
                     size="sm"
-                    onClick={() => openDeleteDialog(exam)}
-                    className="text-destructive hover:text-destructive"
+                    onClick={() => { setSelectedExam(exam); loadExamIntoForm(exam); setEditOpen(true); }}
+                    className="h-7 px-2 text-[11px] text-gray-500 hover:text-gray-700 hover:bg-gray-100 gap-1"
+                  >
+                    <Pencil className="h-3 w-3" /> Edit
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleDuplicate(exam)}
+                    className="h-7 px-2 text-[11px] text-gray-500 hover:text-gray-700 hover:bg-gray-100 gap-1"
+                  >
+                    <Copy className="h-3 w-3" /> Copy
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleToggleStatus(exam)}
+                    className={`h-7 px-2 text-[11px] gap-1 ml-auto ${
+                      exam.status === 'active'
+                        ? 'text-emerald-600 hover:bg-emerald-50'
+                        : 'text-gray-500 hover:text-emerald-600 hover:bg-emerald-50'
+                    }`}
+                  >
+                    {exam.status === 'active'
+                      ? <><ToggleRight className="h-3 w-3" /> Active</>
+                      : <><ToggleLeft className="h-3 w-3" /> Activate</>
+                    }
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => { setSelectedExam(exam); setDeleteOpen(true); }}
+                    className="h-7 w-7 p-0 text-gray-500 hover:text-red-600 hover:bg-red-50"
                   >
                     <Trash2 className="h-3 w-3" />
                   </Button>
                 </div>
-              </CardContent>
-            </Card>
-          ))}
+              </div>
+            );
+          })}
         </div>
       )}
 
-      {/* Edit Dialog */}
-      <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent className="max-w-3xl grid-rows-[auto_1fr_auto] max-h-[90vh] p-0 gap-0">
-          <DialogHeader className="p-6 pb-0">
-            <DialogTitle>Edit Exam</DialogTitle>
-            <DialogDescription>
-              Update exam details and questions
-            </DialogDescription>
-          </DialogHeader>
-          <div className="overflow-y-auto px-6 py-4 max-h-[60vh]">
-            <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="edit-title">Exam Title *</Label>
-                  <Input
-                    id="edit-title"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-subject">Subject *</Label>
-                  <Input
-                    id="edit-subject"
-                    value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="edit-description">Description</Label>
-                <Textarea
-                  id="edit-description"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  rows={2}
-                />
-              </div>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <Label>Questions (Total: {totalMarks} marks)</Label>
-                  <Button variant="outline" size="sm" onClick={addQuestion}>
-                    <Plus className="mr-1 h-3 w-3" />
-                    Add Question
-                  </Button>
-                </div>
-                {questions.map((q, index) => (
-                  <Card key={index}>
-                    <CardHeader className="pb-2">
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-base">Question {q.questionNumber}</CardTitle>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeQuestion(index)}
-                          disabled={questions.length === 1}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      <div className="space-y-2">
-                        <Label>Question Text *</Label>
-                        <Textarea
-                          value={q.questionText}
-                          onChange={(e) => updateQuestion(index, 'questionText', e.target.value)}
-                          rows={2}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Model Answer *</Label>
-                        <Textarea
-                          value={q.modelAnswer}
-                          onChange={(e) => updateQuestion(index, 'modelAnswer', e.target.value)}
-                          rows={3}
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-2">
-                          <Label>Max Marks</Label>
-                          <Input
-                            type="number"
-                            value={q.maxMarks}
-                            onChange={(e) => updateQuestion(index, 'maxMarks', parseFloat(e.target.value) || 0)}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Keywords</Label>
-                          <Input
-                            value={q.keywords?.join(', ') || ''}
-                            onChange={(e) => updateQuestion(index, 'keywords', e.target.value.split(',').map(k => k.trim()).filter(Boolean))}
-                          />
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </div>
-          </div>
-          <DialogFooter className="p-6 pt-4 border-t bg-background">
-            <Button variant="outline" onClick={() => setIsEditOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleUpdateExam} disabled={submitting}>
-              {submitting ? 'Updating...' : 'Update Exam'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* ── Exam Dialogs ──────────────────────────────────────────── */}
+      <ExamDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        mode="create"
+        submitting={submitting}
+        onCreate={handleCreate}
+        initialData={{
+          title,
+          subject,
+          description,
+          status,
+          questions,
+        }}
+      />
 
-      {/* Delete Dialog */}
-      <AlertDialog open={isDeleteOpen} onOpenChange={setIsDeleteOpen}>
-        <AlertDialogContent>
+      <ExamDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        mode="edit"
+        exam={selectedExam}
+        submitting={submitting}
+        onUpdate={handleUpdate}
+        initialData={{
+          title,
+          subject,
+          description,
+          status,
+          questions,
+        }}
+      />
+
+      <ExamDialog
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        mode="preview"
+        exam={selectedExam}
+      />
+
+      {/* ── Delete Alert ───────────────────────────────────────────── */}
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent className="bg-[#0f1016] border-white/[0.08] text-slate-200">
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Exam</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete "{selectedExam?.title}"? This will also delete all
-              submissions and answers associated with this exam. This action cannot be undone.
+            <AlertDialogTitle className="text-white">Delete exam?</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-400">
+              This permanently deletes <strong className="text-slate-200">"{selectedExam?.title}"</strong> and
+              all associated submissions. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={submitting}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={submitting} className="border-white/[0.08] text-slate-300 hover:bg-white/[0.06]">
+              Cancel
+            </AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleDeleteExam}
+              onClick={handleDelete}
               disabled={submitting}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className="bg-red-500 hover:bg-red-600 text-white"
             >
-              {submitting ? 'Deleting...' : 'Delete'}
+              {submitting ? 'Deleting…' : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

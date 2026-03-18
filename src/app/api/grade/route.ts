@@ -1,235 +1,232 @@
+/**
+ * Grading API
+ * POST /api/grade
+ *
+ * Fix applied: pdfjs-dist loaded lazily (not at module top-level) to prevent
+ * webpack bundling, which caused "Cannot find module './pdf.worker.js'".
+ * Requires next.config.ts → serverExternalPackages: ['pdfjs-dist', 'canvas']
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
-import { readFile, access } from 'fs/promises';
+import { readFile, access, mkdir, rm, writeFile } from 'fs/promises';
 import { constants } from 'fs';
 import path from 'path';
 import Groq from 'groq-sdk';
+import { db } from '@/lib/db';
 
-// Initialize Groq client
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY || ''
-});
+// ── Config ────────────────────────────────────────────────────────────────────
+const GROQ_MODEL    = process.env.GROQ_OCR_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct';
+const UPLOAD_DIR    = process.env.UPLOAD_DIR || 'uploads';
+const TEMP_DIR      = process.env.TEMP_DIR   || 'temp';
+const MAX_PDF_PAGES = 50;
+const BATCH_SIZE    = 5;
 
-// Recognize handwritten text from image using Groq Vision API
-async function recognizeHandwriting(
-  imagePath: string,
-  questionText: string
+if (!process.env.GROQ_API_KEY) throw new Error('GROQ_API_KEY is not set');
+
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+// ── Lazy pdfjs loader ─────────────────────────────────────────────────────────
+// Same pattern as /api/ocr — must NOT be at top-level require to avoid webpack bundling.
+let _pdfjsLib: any = null;
+
+function getPdfjs(): any {
+  if (_pdfjsLib) return _pdfjsLib;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  _pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
+  // Empty string activates fake-worker mode (runs in-process, no browser Worker needed)
+  // This works correctly only when pdfjs-dist is NOT webpack-bundled.
+  _pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+  return _pdfjsLib;
+}
+
+// ── Image OCR ─────────────────────────────────────────────────────────────────
+
+async function ocrImage(
+  imagePath:    string,
+  questionText: string,
 ): Promise<{ text: string; confidence: string }> {
   try {
-    // Check if file is PDF
-    const extension = imagePath.split('.').pop()?.toLowerCase();
-    
-    if (extension === 'pdf') {
-      // Handle PDF processing
-      return await extractTextFromPDF(imagePath, questionText);
-    }
-    
-    // Handle image processing
+    const ext      = path.extname(imagePath).replace('.', '').toLowerCase();
+    const mimeMap: Record<string, string> = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg',
+      png: 'image/png',  webp: 'image/webp',
+      tiff: 'image/tiff', tif: 'image/tiff',
+    };
+    const mimeType = mimeMap[ext] ?? 'image/jpeg';
+
     const imageBuffer = await readFile(imagePath);
-    const base64Image = imageBuffer.toString('base64');
-    
-    // Determine mime type
-    const mimeType = extension === 'png' ? 'image/png' : 
-                     extension === 'webp' ? 'image/webp' :
-                     extension === 'tiff' || extension === 'tif' ? 'image/tiff' :
-                     'image/jpeg';
+    const base64      = imageBuffer.toString('base64');
 
-    const prompt = `You are an expert OCR system specialized in reading handwritten text from exam answer sheets.
-
-The student is answering this question: "${questionText}"
-
-Please carefully analyze this handwritten answer image and extract ALL handwritten text accurately. Maintain the original structure and formatting. Return ONLY the extracted text content, no additional commentary.`;
+    const prompt = `You are an expert OCR system for exam answer sheets.
+The student is answering: "${questionText}"
+Extract ALL handwritten text accurately. Preserve structure and formatting.
+Return ONLY the extracted text, no commentary.`;
 
     const completion = await groq.chat.completions.create({
-      model: "meta-llama/llama-4-scout-17b-16e-instruct",
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: prompt
-            },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${mimeType};base64,${base64Image}`
-              }
-            }
-          ]
-        }
-      ],
-      temperature: 1,
-      max_completion_tokens: 1024,
-      top_p: 1,
-      stream: false
+      model:              GROQ_MODEL,
+      temperature:        0.05,
+      max_completion_tokens: 2048,
+      top_p:              0.95,
+      stream:             false,
+      messages: [{
+        role:    'user',
+        content: [
+          { type: 'text',      text: prompt },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
+        ],
+      }],
     });
 
-    const extractedText = completion.choices[0]?.message?.content || '';
-    
-    // Estimate confidence based on response
-    const unclearCount = (extractedText.match(/\[unclear\]/g) || []).length;
-    const confidence = extractedText.length === 0 ? 'low' :
-                       unclearCount > 3 ? 'low' :
-                       unclearCount > 0 ? 'medium' : 'high';
+    const extractedText = completion.choices[0]?.message?.content ?? '';
+    const unclearCount  = (extractedText.match(/\[unclear\]/g) ?? []).length;
+    const confidence    = extractedText.length === 0 ? 'low'
+                        : unclearCount > 3            ? 'low'
+                        : unclearCount > 0            ? 'medium'
+                        : 'high';
 
     return { text: extractedText, confidence };
-  } catch (error) {
-    console.error('Error recognizing handwriting:', error);
+  } catch (err) {
+    console.error('[Grade] Image OCR error:', err);
     return { text: '', confidence: 'low' };
   }
 }
 
-// Extract text from PDF using advanced processing with pdfjs-dist
-async function extractTextFromPDF(
-  pdfPath: string,
-  questionText: string
+// ── PDF text extraction ───────────────────────────────────────────────────────
+
+async function extractPDFText(
+  pdfPath:     string,
+  questionText: string,
 ): Promise<{ text: string; confidence: string }> {
+  const tempId  = `grade-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const tempDir = path.join(process.cwd(), TEMP_DIR, tempId);
+  await mkdir(tempDir, { recursive: true });
+
+  let allText    = '';
+  let confSum    = 0;
+  let confCount  = 0;
+
   try {
-    console.log('Starting advanced PDF processing with pdfjs-dist for grading:', pdfPath);
-    
-    // Method 1: Use pdfjs-dist to extract text and render pages as images
-    try {
-      const fs = require('fs');
-      const pdfjsLib = require('pdfjs-dist');
-      
-      // Set up worker
-      pdfjsLib.GlobalWorkerOptions.workerSrc = require('pdfjs-dist/build/pdf.worker.entry.js');
-      
-      // Read PDF file
-      const pdfBuffer = fs.readFileSync(pdfPath);
-      const loadingTask = pdfjsLib.getDocument({ data: pdfBuffer });
-      const pdf = await loadingTask.promise;
-      
-      console.log(`PDF loaded successfully for grading with ${pdf.numPages} pages`);
-      
-      let allExtractedText = '';
-      let totalConfidence = 0;
-      let processedPages = 0;
-      
-      // Process each page (limit to 3 pages for grading performance)
-      const maxPages = Math.min(pdf.numPages, 3);
-      
-      for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+    const pdfjsLib = getPdfjs();
+
+    const pdfBuffer = await readFile(pdfPath);
+    const pdf = await pdfjsLib.getDocument({
+      data:                      new Uint8Array(pdfBuffer),
+      isEvalSupported:           false,
+      useSystemFonts:            true,
+      fontExtraProperties:       false,
+      useWorkerFetch:            false,
+      isOffscreenCanvasSupported: false,
+    }).promise;
+
+    const totalPages  = pdf.numPages;
+    const pagesToProc = Math.min(totalPages, MAX_PDF_PAGES);
+
+    console.log(`[Grade] PDF ${totalPages}p, processing ${pagesToProc}`);
+
+    // Process in batches
+    for (let batchStart = 1; batchStart <= pagesToProc; batchStart += BATCH_SIZE) {
+      const batchEnd  = Math.min(batchStart + BATCH_SIZE - 1, pagesToProc);
+      const batchNums = Array.from({ length: batchEnd - batchStart + 1 }, (_, i) => batchStart + i);
+
+      await Promise.all(batchNums.map(async pageNum => {
+        const page = await pdf.getPage(pageNum);
+
+        // Try native text layer first
+        let pageText = '';
         try {
-          console.log(`Processing page ${pageNum} for grading...`);
-          
-          // Get page
-          const page = await pdf.getPage(pageNum);
-          
-          // Extract text content
-          const textContent = await page.getTextContent();
-          const pageText = textContent.items
-            .map((item: any) => item.str)
-            .join(' ')
-            .trim();
-          
-          if (pageText.length > 10) {
-            console.log(`Page ${pageNum}: Extracted ${pageText.length} characters of text for grading`);
-            allExtractedText += `\n--- Page ${pageNum} ---\n${pageText}\n`;
-            totalConfidence += 3; // High confidence for extracted text
-            processedPages++;
-          } else {
-            console.log(`Page ${pageNum}: Minimal text found, trying OCR for grading...`);
-            
-            // Render page as image for OCR
-            try {
-              const viewport = page.getViewport({ scale: 1.5 });
-              const { createCanvas } = require('canvas');
-              const canvas = createCanvas(viewport.width, viewport.height);
-              const context = canvas.getContext('2d');
-              
-              // Render PDF page to canvas
-              await page.render({ canvasContext: context, viewport }).promise;
-              
-              // Convert canvas to buffer
-              const imageBuffer = canvas.toBuffer('image/png');
-              
-              // Save temporary image file
-              const tempImagePath = `${process.cwd()}/temp/pdf-grade-${pageNum}-${Date.now()}.png`;
-              fs.writeFileSync(tempImagePath, imageBuffer);
-              
-              // Use OCR on the rendered image
-              const ocrResult = await recognizeHandwriting(tempImagePath, questionText);
-              
-              if (ocrResult.text && ocrResult.text.trim().length > 10) {
-                allExtractedText += `\n--- Page ${pageNum} (OCR) ---\n${ocrResult.text}\n`;
-                totalConfidence += ocrResult.confidence === 'high' ? 3 : ocrResult.confidence === 'medium' ? 2 : 1;
-                console.log(`Page ${pageNum}: OCR completed successfully for grading`);
-              } else {
-                allExtractedText += `\n--- Page ${pageNum} ---\n[No readable text found on this page]\n`;
-              }
-              
-              // Clean up temporary file
-              try {
-                fs.unlinkSync(tempImagePath);
-              } catch (cleanupError) {
-                console.warn(`Failed to clean up ${tempImagePath} in grading:`, cleanupError);
-              }
-            } catch (ocrError) {
-              console.error(`OCR failed for page ${pageNum} in grading:`, ocrError);
-              allExtractedText += `\n--- Page ${pageNum} ---\n[OCR processing failed for this page]\n`;
-            }
-          }
-        } catch (pageError) {
-          console.error(`Error processing page ${pageNum} for grading:`, pageError);
-          allExtractedText += `\n--- Page ${pageNum} ---\n[Error processing this page]\n`;
+          const tc = await page.getTextContent({ normalizeWhitespace: true });
+          pageText  = tc.items.map((i: { str: string }) => i.str).join(' ').trim();
+        } catch { /* no text layer */ }
+
+        if (pageText.length > 30) {
+          allText  += `\n--- Page ${pageNum} ---\n${pageText}\n`;
+          confSum  += 3;
+          confCount++;
+          return;
         }
-      }
-      
-      if (processedPages > 0 || allExtractedText.trim().length > 20) {
-        // Calculate average confidence
-        const avgConfidence = processedPages > 0 ? totalConfidence / (processedPages * 3) : 0.5;
-        const confidence = avgConfidence >= 0.7 ? 'high' : avgConfidence >= 0.4 ? 'medium' : 'low';
-        
-        console.log(`PDF processing for grading completed. Processed ${processedPages} pages with confidence: ${confidence}`);
-        return { text: allExtractedText.trim(), confidence };
-      }
-    } catch (pdfjsError) {
-      console.error('PDF.js processing failed for grading:', pdfjsError);
+
+        // Fall back to vision OCR on rendered page
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { createCanvas } = require('canvas');
+          const viewport = page.getViewport({ scale: 2.5 });
+          const canvas   = createCanvas(viewport.width, viewport.height);
+          const ctx      = canvas.getContext('2d');
+          ctx.fillStyle  = '#ffffff';
+          ctx.fillRect(0, 0, viewport.width, viewport.height);
+          await page.render({ canvasContext: ctx, viewport }).promise;
+
+          const imgPath = path.join(tempDir, `p${pageNum}.png`);
+          await writeFile(imgPath, canvas.toBuffer('image/png', { compressionLevel: 1 }));
+
+          const result = await ocrImage(imgPath, questionText);
+          try { await rm(imgPath, { force: true }); } catch { /* ignore */ }
+
+          if (result.text.trim().length > 10) {
+            allText  += `\n--- Page ${pageNum} (OCR) ---\n${result.text}\n`;
+            confSum  += result.confidence === 'high' ? 3 : result.confidence === 'medium' ? 2 : 1;
+            confCount++;
+          } else {
+            allText += `\n--- Page ${pageNum} ---\n[No readable text found]\n`;
+          }
+        } catch (err) {
+          console.warn(`[Grade] Render failed page ${pageNum}:`, (err as Error).message);
+          allText += `\n--- Page ${pageNum} ---\n[Render failed]\n`;
+        }
+      }));
     }
-    
-    // Method 2: Fallback - Try basic file reading
-    console.log('PDF.js failed for grading, trying fallback method...');
-    try {
-      const fs = require('fs');
-      const stats = fs.statSync(pdfPath);
-      
-      return { 
-        text: `[PDF document received for grading (${Math.round(stats.size / 1024)}KB). The system attempted to extract text using multiple methods including:\n\n• Direct text extraction for selectable text\n• OCR processing for scanned content and images\n• Drawing and diagram recognition\n\nHowever, automatic extraction was not successful. This could be due to:\n• The PDF being password-protected\n• Very complex layouts or formatting\n• Corrupted PDF file\n• Unsupported content types\n\nRecommendations:\n• Try uploading the document as individual images\n• Ensure the PDF is not password-protected\n• For best results, upload clear images of handwritten content\n• The system can process images, drawings, and handwritten text very effectively]`, 
-        confidence: 'low' 
-      };
-    } catch (fallbackError) {
-      console.error('Fallback processing also failed for grading:', fallbackError);
-      return { text: '[PDF processing failed completely for grading]', confidence: 'low' };
+
+    if (!allText.trim()) {
+      return { text: '[PDF contained no extractable text]', confidence: 'low' };
     }
-  } catch (error) {
-    console.error('Critical error in PDF processing for grading:', error);
-    return { text: '', confidence: 'low' };
+
+    const avgConf   = confCount > 0 ? confSum / (confCount * 3) : 0.3;
+    const confidence = avgConf >= 0.7 ? 'high' : avgConf >= 0.4 ? 'medium' : 'low';
+    return { text: allText.trim(), confidence };
+
+  } catch (err) {
+    console.error('[Grade] PDF extraction error:', err);
+    return { text: '[PDF processing failed]', confidence: 'low' };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
-// Evaluate answer against model answer using LLM
-async function evaluateAnswer(
-  recognizedText: string,
-  modelAnswer: string,
-  keywords: string[],
-  maxMarks: number,
-  questionText: string
-): Promise<{
+// ── Handwriting recognition dispatcher ───────────────────────────────────────
+
+async function recognizeHandwriting(
+  filePath:    string,
+  questionText: string,
+): Promise<{ text: string; confidence: string }> {
+  const ext = path.extname(filePath).replace('.', '').toLowerCase();
+  if (ext === 'pdf') return extractPDFText(filePath, questionText);
+  return ocrImage(filePath, questionText);
+}
+
+// ── AI answer evaluation ──────────────────────────────────────────────────────
+
+async function evaluateAnswer(params: {
+  recognizedText: string;
+  modelAnswer:    string;
+  keywords:       string[];
+  maxMarks:       number;
+  questionText:   string;
+}): Promise<{
   similarityScore: number;
-  keywordScore: number;
-  finalScore: number;
-  feedback: string;
-  keyPointsFound: string[];
+  keywordScore:    number;
+  finalScore:      number;
+  feedback:        string;
+  keyPointsFound:  string[];
   keyPointsMissed: string[];
 }> {
+  const { recognizedText, modelAnswer, keywords, maxMarks, questionText } = params;
+
   try {
-    const keywordsList = keywords.length > 0 
-      ? `\nKEYWORDS TO LOOK FOR: ${keywords.join(', ')}` 
+    const kwLine = keywords.length > 0
+      ? `\nKEYWORDS TO CHECK: ${keywords.join(', ')}`
       : '';
 
-    const prompt = `You are an expert exam grader. Evaluate this student's answer.
+    const prompt = `You are an expert exam grader. Evaluate this student answer fairly.
 
 QUESTION: ${questionText}
 
@@ -238,243 +235,212 @@ ${recognizedText}
 
 MODEL ANSWER:
 ${modelAnswer}
-${keywordsList}
+${kwLine}
 
-Evaluate and respond in this exact JSON format:
+Respond with this exact JSON (no fences, no preamble):
 {
-  "similarityScore": <number 0-1 representing semantic similarity>,
-  "keywordScore": <number 0-1 representing keyword coverage>,
-  "finalScore": <number representing marks to award out of ${maxMarks}>,
-  "feedback": "<detailed feedback for the student>",
-  "keyPointsFound": ["<point1>", "<point2>"],
-  "keyPointsMissed": ["<point1>", "<point2>"]
+  "similarityScore": <0–1 semantic similarity>,
+  "keywordScore":    <0–1 keyword coverage>,
+  "finalScore":      <marks out of ${maxMarks}>,
+  "feedback":        "<constructive feedback for the student>",
+  "keyPointsFound":  ["point covered by student"],
+  "keyPointsMissed": ["important point student missed"]
 }
 
-Be fair and constructive. Award partial credit where appropriate.`;
+Guidelines:
+- Award partial credit for partially correct answers.
+- Be fair and constructive.
+- finalScore must be between 0 and ${maxMarks}.`;
 
     const response = await groq.chat.completions.create({
-      model: "meta-llama/llama-4-scout-17b-16e-instruct",
-      messages: [
-        { role: 'system', content: 'You are an expert exam grader. Always respond with valid JSON only.' },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.3,
+      model:              GROQ_MODEL,
+      temperature:        0.2,
       max_completion_tokens: 1024,
-      top_p: 1,
-      stream: false
+      top_p:              0.95,
+      stream:             false,
+      messages: [
+        { role: 'system', content: 'You are an expert exam grader. Always respond with valid JSON only, no markdown.' },
+        { role: 'user',   content: prompt },
+      ],
     });
 
-    const content = response.choices[0]?.message?.content || '';
-    
-    // Parse JSON response
+    const content   = response.choices[0]?.message?.content ?? '';
     const jsonMatch = content.match(/\{[\s\S]*\}/);
+
     if (jsonMatch) {
       const result = JSON.parse(jsonMatch[0]);
       return {
-        similarityScore: Math.min(1, Math.max(0, result.similarityScore || 0)),
-        keywordScore: Math.min(1, Math.max(0, result.keywordScore || 0)),
-        finalScore: Math.min(maxMarks, Math.max(0, result.finalScore || 0)),
-        feedback: result.feedback || 'No feedback available',
-        keyPointsFound: result.keyPointsFound || [],
-        keyPointsMissed: result.keyPointsMissed || []
+        similarityScore: Math.min(1, Math.max(0, Number(result.similarityScore) || 0)),
+        keywordScore:    Math.min(1, Math.max(0, Number(result.keywordScore)    || 0)),
+        finalScore:      Math.min(maxMarks, Math.max(0, Number(result.finalScore) || 0)),
+        feedback:        typeof result.feedback === 'string' ? result.feedback : 'No feedback available.',
+        keyPointsFound:  Array.isArray(result.keyPointsFound)  ? result.keyPointsFound  : [],
+        keyPointsMissed: Array.isArray(result.keyPointsMissed) ? result.keyPointsMissed : [],
       };
     }
-  } catch (error) {
-    console.error('Error evaluating answer:', error);
+  } catch (err) {
+    console.error('[Grade] Evaluation error:', err);
   }
 
-  // Return default values if evaluation fails
   return {
     similarityScore: 0,
-    keywordScore: 0,
-    finalScore: 0,
-    feedback: 'Evaluation failed',
-    keyPointsFound: [],
-    keyPointsMissed: []
+    keywordScore:    0,
+    finalScore:      0,
+    feedback:        'Evaluation failed — please review manually.',
+    keyPointsFound:  [],
+    keyPointsMissed: [],
   };
 }
 
-// POST /api/grade - Process and grade a submission
+// ── POST /api/grade ───────────────────────────────────────────────────────────
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { submissionId, answerIds } = body;
+    const { submissionId, answerIds } = body as {
+      submissionId?: string;
+      answerIds?:    string[];
+    };
 
     if (!submissionId) {
-      return NextResponse.json(
-        { error: 'Missing submissionId' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'submissionId is required' }, { status: 400 });
     }
 
-    // Get submission with answers and questions
+    // ── Fetch submission ──────────────────────────────────────────────────────
     const submission = await db.submission.findUnique({
-      where: { id: submissionId },
+      where:   { id: submissionId },
       include: {
-        exam: {
-          include: {
-            questions: true
-          }
-        },
-        answers: {
-          include: {
-            question: true
-          },
-          orderBy: { questionNumber: 'asc' }
-        }
-      }
+        exam:    { include: { questions: true } },
+        answers: { include: { question: true }, orderBy: { questionNumber: 'asc' } },
+      },
     });
 
     if (!submission) {
-      return NextResponse.json(
-        { error: 'Submission not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Submission not found' }, { status: 404 });
     }
 
-    // Update submission status to processing
+    // Mark as processing
     await db.submission.update({
       where: { id: submissionId },
-      data: { status: 'processing' }
+      data:  { status: 'processing' },
     });
 
-    // Filter answers to grade if specific answerIds provided
-    const answersToGrade = answerIds 
+    const answersToGrade = answerIds
       ? submission.answers.filter(a => answerIds.includes(a.id))
       : submission.answers;
 
-    // Process each answer
+    // ── Grade each answer ─────────────────────────────────────────────────────
     const results: any[] = [];
+
     for (const answer of answersToGrade) {
       const question = answer.question;
-      
-      // Use pre-extracted text if available, otherwise extract from image
-      let recognizedText = answer.recognizedText || '';
-      let confidence = answer.confidenceLevel || 'medium';
 
-      // If no pre-extracted text but image exists, extract it now
-      if (!recognizedText && answer.handwrittenImagePath) {
-        const imagePath = path.join(process.cwd(), 'uploads', answer.handwrittenImagePath);
-        
+      // Use pre-extracted text if available
+      let recognizedText = answer.recognizedText ?? '';
+      let confidence     = answer.confidenceLevel ?? 'medium';
+
+      // If no text yet but we have an image, extract now
+      if (!recognizedText.trim() && answer.handwrittenImagePath) {
+        const imgFullPath = path.join(process.cwd(), UPLOAD_DIR, answer.handwrittenImagePath);
         try {
-          await access(imagePath, constants.R_OK);
-          const recognition = await recognizeHandwriting(imagePath, question.questionText);
-          recognizedText = recognition.text;
-          confidence = recognition.confidence;
+          await access(imgFullPath, constants.R_OK);
+          const result   = await recognizeHandwriting(imgFullPath, question.questionText);
+          recognizedText = result.text;
+          confidence     = result.confidence;
         } catch {
-          console.error(`Image not found: ${imagePath}`);
+          console.warn(`[Grade] File not found: ${imgFullPath}`);
           recognizedText = '[Image not found]';
-          confidence = 'low';
+          confidence     = 'low';
         }
       }
 
-      // If still no text, mark as not provided
-      if (!recognizedText || recognizedText.trim() === '') {
+      if (!recognizedText.trim()) {
         recognizedText = '[No answer provided]';
-        confidence = 'low';
+        confidence     = 'low';
       }
 
-      // Parse keywords from question
+      // Parse keywords
       let keywords: string[] = [];
       if (question.keywords) {
-        try {
-          keywords = JSON.parse(question.keywords as string) as string[];
-        } catch {
-          keywords = [];
-        }
+        try { keywords = JSON.parse(question.keywords as string) as string[]; } catch { /* ignore */ }
       }
 
-      // Evaluate the answer
-      const evaluation = await evaluateAnswer(
+      // Evaluate
+      const evaluation = await evaluateAnswer({
         recognizedText,
-        question.modelAnswer,
+        modelAnswer:  question.modelAnswer,
         keywords,
-        question.maxMarks,
-        question.questionText
-      );
+        maxMarks:     question.maxMarks,
+        questionText: question.questionText,
+      });
 
-      // Update answer in database
-      const updatedAnswer = await db.answer.update({
+      // Persist
+      const updated = await db.answer.update({
         where: { id: answer.id },
         data: {
           recognizedText,
-          modelAnswer: question.modelAnswer,
+          modelAnswer:     question.modelAnswer,
           similarityScore: evaluation.similarityScore,
-          keywordScore: evaluation.keywordScore,
-          finalScore: evaluation.finalScore,
-          feedback: evaluation.feedback,
-          keyPointsFound: JSON.stringify(evaluation.keyPointsFound),
+          keywordScore:    evaluation.keywordScore,
+          finalScore:      evaluation.finalScore,
+          feedback:        evaluation.feedback,
+          keyPointsFound:  JSON.stringify(evaluation.keyPointsFound),
           keyPointsMissed: JSON.stringify(evaluation.keyPointsMissed),
           confidenceLevel: confidence,
-          needsReview: confidence === 'low' || evaluation.finalScore < question.maxMarks * 0.3
-        }
+          needsReview:     confidence === 'low' || evaluation.finalScore < question.maxMarks * 0.3,
+        },
       });
 
-      results.push(updatedAnswer);
+      results.push(updated);
     }
 
-    // Calculate total score
-    const allAnswers = await db.answer.findMany({
-      where: { submissionId }
-    });
-
-    const totalScore = allAnswers.reduce((sum, a) => sum + (a.finalScore || 0), 0);
-    const maxScore = allAnswers.reduce((sum, a) => sum + a.maxMarks, 0);
+    // ── Compute totals ────────────────────────────────────────────────────────
+    const allAnswers = await db.answer.findMany({ where: { submissionId } });
+    const totalScore = allAnswers.reduce((s, a) => s + (a.finalScore ?? 0), 0);
+    const maxScore   = allAnswers.reduce((s, a) => s + a.maxMarks, 0);
     const percentage = maxScore > 0 ? (totalScore / maxScore) * 100 : 0;
 
-    // Generate overall feedback
-    const feedbackResponse = await groq.chat.completions.create({
-      model: "meta-llama/llama-4-scout-17b-16e-instruct",
-      messages: [
-        { 
-          role: 'system', 
-          content: 'You are an encouraging teacher providing overall feedback on exam performance.' 
-        },
-        { 
-          role: 'user', 
-          content: `A student scored ${totalScore.toFixed(1)} out of ${maxScore} (${percentage.toFixed(1)}%) on an exam. 
-                    The exam is titled "${submission.exam.title}" in subject "${submission.exam.subject}".
-                    Provide a brief, encouraging overall feedback comment (2-3 sentences).`
-        }
-      ],
-      temperature: 0.7,
-      max_completion_tokens: 200,
-      top_p: 1,
-      stream: false
-    });
+    // ── Overall feedback ──────────────────────────────────────────────────────
+    let overallFeedback = 'Thank you for your submission.';
+    try {
+      const fbRes = await groq.chat.completions.create({
+        model:              GROQ_MODEL,
+        temperature:        0.6,
+        max_completion_tokens: 200,
+        stream:             false,
+        messages: [
+          { role: 'system', content: 'You are an encouraging teacher providing brief overall exam feedback.' },
+          {
+            role: 'user',
+            content: `Student scored ${totalScore.toFixed(1)}/${maxScore} (${percentage.toFixed(1)}%) in "${submission.exam.title}" (${submission.exam.subject}). Write 2–3 encouraging sentences.`,
+          },
+        ],
+      });
+      overallFeedback = fbRes.choices[0]?.message?.content ?? overallFeedback;
+    } catch { /* non-critical */ }
 
-    const overallFeedback = feedbackResponse.choices[0]?.message?.content || 'Thank you for your submission.';
-
-    // Update submission with final scores
+    // ── Update submission ─────────────────────────────────────────────────────
     const updatedSubmission = await db.submission.update({
       where: { id: submissionId },
       data: {
-        status: 'graded',
+        status:     'graded',
         totalScore,
         maxScore,
         percentage,
-        feedback: overallFeedback
+        feedback:   overallFeedback,
       },
       include: {
-        answers: {
-          include: {
-            question: true
-          },
-          orderBy: { questionNumber: 'asc' }
-        }
-      }
+        answers: { include: { question: true }, orderBy: { questionNumber: 'asc' } },
+      },
     });
 
     return NextResponse.json({
-      success: true,
-      submission: updatedSubmission,
-      gradedAnswers: results
+      success:       true,
+      submission:    updatedSubmission,
+      gradedAnswers: results,
     });
-  } catch (error) {
-    console.error('Error grading submission:', error);
-    return NextResponse.json(
-      { error: 'Failed to grade submission' },
-      { status: 500 }
-    );
+  } catch (err) {
+    console.error('[Grade] Route error:', err);
+    return NextResponse.json({ error: 'Failed to grade submission' }, { status: 500 });
   }
 }
