@@ -1,0 +1,95 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Teacher/Examiner who creates exams
+model Teacher {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  exams     Exam[]
+}
+
+// Exam created by teacher
+model Exam {
+  id          String     @id @default(cuid())
+  title       String
+  subject     String
+  description String?
+  totalMarks  Float
+  status      String     @default("draft") // draft, active, graded
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  teacherId   String
+  teacher     Teacher    @relation(fields: [teacherId], references: [id])
+  questions   Question[]
+  submissions Submission[]
+}
+
+// Questions in an exam
+model Question {
+  id             String   @id @default(cuid())
+  questionNumber Int
+  questionText   String
+  modelAnswer    String   // Expected answer
+  maxMarks       Float
+  keywords       String?  // JSON array of keywords for grading
+  gradingNotes   String?  // Additional grading instructions
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  examId         String
+  exam           Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  answers        Answer[]
+}
+
+// Student submission for an exam
+model Submission {
+  id           String   @id @default(cuid())
+  studentName  String
+  studentId    String?  // Roll number or student ID
+  submittedAt  DateTime @default(now())
+  status       String   @default("pending") // pending, processing, graded
+  totalScore   Float?   @default(0)
+  maxScore     Float?   @default(0)
+  percentage   Float?   @default(0)
+  feedback     String?  // Overall feedback
+  examId       String
+  exam         Exam     @relation(fields: [examId], references: [id])
+  answers      Answer[]
+}
+
+// Individual answer from a student
+model Answer {
+  id                   String   @id @default(cuid())
+  questionNumber       Int
+  handwrittenImagePath String? // Path to uploaded handwritten image
+  recognizedText       String? // Text recognized from handwriting
+  modelAnswer          String? // Copy of model answer for comparison
+  similarityScore      Float?   @default(0) // Semantic similarity (0-1)
+  keywordScore         Float?   @default(0) // Keyword coverage (0-1)
+  finalScore           Float?   @default(0) // Final marks awarded
+  maxMarks             Float    @default(0)
+  feedback             String?  // AI-generated feedback
+  keyPointsFound       String?  // JSON array of matched key points
+  keyPointsMissed      String?  // JSON array of missed key points
+  confidenceLevel      String?  @default("medium") // low, medium, high
+  needsReview          Boolean  @default(false)
+  reviewedAt           DateTime?
+  reviewedBy           String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  questionId           String
+  question             Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  submissionId         String
+  submission           Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+}
