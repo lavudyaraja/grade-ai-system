@@ -32,11 +32,13 @@ export async function POST(request: NextRequest) {
 
     // ── Validation ───────────────────────────────────────────────────────
     if (!file) {
+      console.error('[UPLOAD] No file provided');
       return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     }
 
     const ext = ALLOWED_MIME_TYPES[file.type];
     if (!ext) {
+      console.error('[UPLOAD] Unsupported file type:', file.type);
       return NextResponse.json(
         {
           error: `Unsupported file type "${file.type}". Allowed: JPEG, PNG, WebP, TIFF, PDF`,
@@ -47,6 +49,7 @@ export async function POST(request: NextRequest) {
 
     if (file.size > MAX_FILE_SIZE) {
       const maxMB = Math.round(MAX_FILE_SIZE / 1024 / 1024);
+      console.error('[UPLOAD] File too large:', file.size, 'bytes');
       return NextResponse.json(
         { error: `File too large. Maximum size is ${maxMB} MB` },
         { status: 400 }
@@ -79,14 +82,27 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Ensure directories exist ─────────────────────────────────────────
-    if (!existsSync(uploadRoot)) await mkdir(uploadRoot, { recursive: true });
-    if (!existsSync(tempRoot)) await mkdir(tempRoot, { recursive: true });
-    if (!existsSync(targetDir)) await mkdir(targetDir, { recursive: true });
+    try {
+      if (!existsSync(uploadRoot)) await mkdir(uploadRoot, { recursive: true });
+      if (!existsSync(tempRoot)) await mkdir(tempRoot, { recursive: true });
+      if (!existsSync(targetDir)) await mkdir(targetDir, { recursive: true });
+      
+      console.log('[UPLOAD] Directories created/verified:', { uploadRoot, targetDir });
+    } catch (dirError) {
+      console.error('[UPLOAD] Directory creation failed:', dirError);
+      return NextResponse.json({ error: 'Failed to create upload directories' }, { status: 500 });
+    }
 
     // ── Write file ───────────────────────────────────────────────────────
     const fullPath = path.join(process.cwd(), UPLOAD_DIR, relativePath);
-    const bytes = await file.arrayBuffer();
-    await writeFile(fullPath, Buffer.from(bytes));
+    try {
+      const bytes = await file.arrayBuffer();
+      await writeFile(fullPath, Buffer.from(bytes));
+      console.log('[UPLOAD] File written successfully:', fullPath);
+    } catch (writeError) {
+      console.error('[UPLOAD] File write failed:', writeError);
+      return NextResponse.json({ error: 'Failed to write file' }, { status: 500 });
+    }
 
     return NextResponse.json({
       success: true,
@@ -96,7 +112,7 @@ export async function POST(request: NextRequest) {
       mimeType: file.type,
     });
   } catch (error) {
-    console.error('Upload error:', error);
-    return NextResponse.json({ error: 'Upload failed' }, { status: 500 });
+    console.error('[UPLOAD] Unexpected error:', error);
+    return NextResponse.json({ error: 'Upload failed — please try again' }, { status: 500 });
   }
 }

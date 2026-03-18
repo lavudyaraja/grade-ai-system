@@ -378,6 +378,7 @@ export async function POST(request: NextRequest) {
     const { filePath, questionText } = body as { filePath?: string; questionText?: string };
 
     if (!filePath) {
+      console.error('[OCR] filePath is required');
       return NextResponse.json({ error: 'filePath is required' }, { status: 400 });
     }
 
@@ -386,6 +387,7 @@ export async function POST(request: NextRequest) {
     try {
       await access(fullPath, constants.R_OK);
     } catch {
+      console.error('[OCR] File not found:', fullPath);
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
 
@@ -393,29 +395,48 @@ export async function POST(request: NextRequest) {
     const supportedExts = ['jpg','jpeg','png','webp','tiff','tif','pdf'];
 
     if (!supportedExts.includes(ext)) {
+      console.error('[OCR] Unsupported format:', ext);
       return NextResponse.json(
         { error: `Unsupported format: ${ext}. Supported: ${supportedExts.join(', ')}` },
         { status: 400 },
       );
     }
 
+    // Check if Groq API key is configured
+    if (!GROQ_API_KEY) {
+      console.error('[OCR] GROQ_API_KEY not configured');
+      return NextResponse.json({ error: 'OCR service not configured' }, { status: 500 });
+    }
+
     let pages: PageExtraction[];
 
-    if (ext === 'pdf') {
-      pages = await processPDF(fullPath, questionText);
-    } else {
-      const mimeMap: Record<string, string> = {
-        jpg: 'image/jpeg', jpeg: 'image/jpeg',
-        png: 'image/png',  webp: 'image/webp',
-        tiff: 'image/tiff', tif: 'image/tiff',
-      };
-      pages = [await ocrImage(fullPath, mimeMap[ext] ?? 'image/jpeg', questionText, 1, 1)];
+    try {
+      if (ext === 'pdf') {
+        console.log('[OCR] Processing PDF:', filePath);
+        pages = await processPDF(fullPath, questionText);
+      } else {
+        console.log('[OCR] Processing image:', filePath);
+        const mimeMap: Record<string, string> = {
+          jpg: 'image/jpeg', jpeg: 'image/jpeg',
+          png: 'image/png',  webp: 'image/webp',
+          tiff: 'image/tiff', tif: 'image/tiff',
+        };
+        pages = [await ocrImage(fullPath, mimeMap[ext] ?? 'image/jpeg', questionText, 1, 1)];
+      }
+    } catch (processingError) {
+      console.error('[OCR] Processing failed:', processingError);
+      return NextResponse.json({ 
+        error: 'OCR processing failed. Please check the file and try again.',
+        details: processingError instanceof Error ? processingError.message : 'Unknown error'
+      }, { status: 500 });
     }
 
     const flatText          = flattenPages(pages);
     const overallConfidence = pages.some(p => p.confidence === 'high')   ? 'high'
                             : pages.some(p => p.confidence === 'medium') ? 'medium'
                             : 'low';
+
+    console.log('[OCR] Success:', { filePath, pages: pages.length, confidence: overallConfidence });
 
     return NextResponse.json({
       success:         true,
@@ -428,7 +449,10 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     console.error('[OCR] Route error:', err);
-    return NextResponse.json({ error: 'OCR failed' }, { status: 500 });
+    return NextResponse.json({ 
+      error: 'OCR service temporarily unavailable',
+      details: err instanceof Error ? err.message : 'Unknown error'
+    }, { status: 500 });
   }
 }
 

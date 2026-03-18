@@ -145,29 +145,59 @@ export default function UploadTab({ teacherId, onSubmissionCreated }: UploadTabP
     fd.append('file', file);
     fd.append('submissionId', subId);
     fd.append('questionNumber', String(qNum));
+    
     try {
+      console.log('[UPLOAD] Starting upload:', { qNum, fileName: file.name, fileSize: file.size });
+      
       const res = await fetch('/api/upload', { method: 'POST', body: fd });
-      if (!res.ok) return null;
-      return (await res.json()).filePath ?? null;
-    } catch { return null; }
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        console.error('[UPLOAD] Failed:', res.status, errorData);
+        return null;
+      }
+      
+      const result = await res.json();
+      console.log('[UPLOAD] Success:', result.filePath);
+      return result.filePath ?? null;
+    } catch (error) {
+      console.error('[UPLOAD] Exception:', error);
+      return null;
+    }
   };
 
   // ── OCR ────────────────────────────────────────────────────────────────────
   const runOCR = async (filePath: string, questionText: string) => {
     try {
+      console.log('[OCR] Starting OCR:', { filePath, questionText: questionText?.substring(0, 50) + '...' });
+      
       const res = await fetch('/api/ocr', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filePath, questionText }),
       });
-      if (!res.ok) return { pages: [] as PageExtraction[], flatText: '', confidence: 'low' as const };
-      const d = await res.json();
+      
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        console.error('[OCR] Failed:', res.status, errorData);
+        return { pages: [] as PageExtraction[], flatText: '', confidence: 'low' as const };
+      }
+      
+      const result = await res.json();
+      console.log('[OCR] Success:', { 
+        filePath, 
+        pages: result.pages?.length || 0, 
+        confidence: result.confidence,
+        textLength: result.text?.length || 0
+      });
+      
       return {
-        pages:      d.pages     ?? [] as PageExtraction[],
-        flatText:   d.text      ?? '',
-        confidence: d.confidence ?? 'low' as 'high' | 'medium' | 'low',
+        pages:      result.pages     ?? [] as PageExtraction[],
+        flatText:   result.text      ?? '',
+        confidence: result.confidence ?? 'low' as 'high' | 'medium' | 'low',
       };
-    } catch {
+    } catch (error) {
+      console.error('[OCR] Exception:', error);
       return { pages: [] as PageExtraction[], flatText: '', confidence: 'low' as const };
     }
   };
