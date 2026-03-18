@@ -6,6 +6,10 @@
 echo "🚀 Testing Grade AI Deployment..."
 
 # Get the base URL (first argument or default to localhost)
+# Usage examples:
+#   ./test-deployment.sh                    # Tests localhost:3000
+#   ./test-deployment.sh http://localhost:3000  # Tests localhost
+#   ./test-deployment.sh https://grade-ai-system.vercel.app  # Tests production
 BASE_URL=${1:-"http://localhost:3000"}
 
 echo "📍 Testing against: $BASE_URL"

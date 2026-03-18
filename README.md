@@ -157,8 +157,12 @@ TEMP_DIR="temp"
 MAX_FILE_SIZE="52428800"
 
 # ── App ───────────────────────────────────────────────────────────────────────
+# Development (local)
 NEXT_PUBLIC_APP_URL="http://localhost:3000"
 NEXTAUTH_URL="http://localhost:3000"
+# Production (Vercel)
+# NEXT_PUBLIC_APP_URL="https://grade-ai-system.vercel.app"
+# NEXTAUTH_URL="https://grade-ai-system.vercel.app"
 NEXTAUTH_SECRET="generate-a-random-secret-here"
 ```
 
@@ -185,6 +189,8 @@ bun run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+**Production Deployment**: [https://grade-ai-system.vercel.app](https://grade-ai-system.vercel.app)
 
 ---
 
@@ -542,7 +548,7 @@ CMD ["node", "server.js"]
 | `UPLOAD_DIR` | ❌ | `uploads` | Directory for uploaded files |
 | `TEMP_DIR` | ❌ | `temp` | Directory for temporary PDF rendering |
 | `MAX_FILE_SIZE` | ❌ | `52428800` | Max upload size in bytes (50 MB) |
-| `NEXT_PUBLIC_APP_URL` | ❌ | `http://localhost:3000` | Public base URL |
+| `NEXT_PUBLIC_APP_URL` | ❌ | `http://localhost:3000` | Public base URL (development: `http://localhost:3000`, production: `https://grade-ai-system.vercel.app`) |
 | `NEXTAUTH_SECRET` | ✅ | — | NextAuth session signing secret |
 
 ---
