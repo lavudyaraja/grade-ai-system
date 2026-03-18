@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
-    "build": "next build && robocopy .next\\static .next\\standalone\\.next /E && robocopy public .next\\standalone /E",
+    "build": "next build",
     "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "eslint .",
     "db:push": "prisma db push",
