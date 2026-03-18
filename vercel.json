@@ -1,15 +1,6 @@
 {
   "version": 2,
   "name": "grade-ai-system",
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/next",
-      "config": {
-        "distDir": ".next"
-      }
-    }
-  ],
   "routes": [
     {
       "src": "/api/(.*)",
