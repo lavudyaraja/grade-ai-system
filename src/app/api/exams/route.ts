@@ -33,6 +33,8 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { title, subject, description, totalMarks, teacherId, questions } = body;
 
+    console.log('Creating exam with data:', { title, subject, teacherId, questionsCount: questions?.length });
+
     // Validate required fields
     if (!title || !subject || !teacherId) {
       return NextResponse.json(
@@ -42,6 +44,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if teacher exists, if not create one
+    console.log('Looking for teacher with ID:', teacherId);
     let teacher = await db.teacher.findUnique({
       where: { id: teacherId }
     });

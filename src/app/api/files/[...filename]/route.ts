@@ -17,11 +17,11 @@ const MIME_TYPES: Record<string, string> = {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { filename: string[] } }
+  { params }: { params: Promise<{ filename: string[] }> }
 ) {
   try {
     // Reconstruct the relative path from path segments
-    const segments = params.filename;
+    const { filename: segments } = await params;
 
     // ── Security: block directory traversal ──────────────────────────────
     // Each segment must not be ".." or contain null bytes / backslashes.

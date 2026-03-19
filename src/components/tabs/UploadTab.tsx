@@ -35,6 +35,7 @@ interface FileEntry {
   previewUrl:     string | null;
   uploaded:       boolean;
   filePath:       string | null;
+  fileUrl:        string | null;
   pages:          PageExtraction[];
   flatText:       string;
   confidence:     'high' | 'medium' | 'low' | null;
@@ -112,6 +113,7 @@ export default function UploadTab({ teacherId, onSubmissionCreated }: UploadTabP
           previewUrl:     null,
           uploaded:       false,
           filePath:       null,
+          fileUrl:        null,
           pages:          [],
           flatText:       '',
           confidence:     null,
@@ -140,7 +142,7 @@ export default function UploadTab({ teacherId, onSubmissionCreated }: UploadTabP
   );
 
   // ── Upload ─────────────────────────────────────────────────────────────────
-  const uploadFile = async (qNum: number, file: File, subId: string): Promise<string | null> => {
+  const uploadFile = async (qNum: number, file: File, subId: string): Promise<{ pathname: string; url: string } | null> => {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('submissionId', subId);
@@ -158,8 +160,8 @@ export default function UploadTab({ teacherId, onSubmissionCreated }: UploadTabP
       }
       
       const result = await res.json();
-      console.log('[UPLOAD] Success:', result.filePath);
-      return result.filePath ?? null;
+      console.log('[UPLOAD] Success:', result.pathname);
+      return { pathname: result.pathname, url: result.url };
     } catch (error) {
       console.error('[UPLOAD] Exception:', error);
       return null;
@@ -167,14 +169,14 @@ export default function UploadTab({ teacherId, onSubmissionCreated }: UploadTabP
   };
 
   // ── OCR ────────────────────────────────────────────────────────────────────
-  const runOCR = async (filePath: string, questionText: string) => {
+  const runOCR = async (filePath: string, fileUrl: string, questionText: string) => {
     try {
-      console.log('[OCR] Starting OCR:', { filePath, questionText: questionText?.substring(0, 50) + '...' });
+      console.log('[OCR] Starting OCR:', { filePath, fileUrl, questionText: questionText?.substring(0, 50) + '...' });
       
       const res = await fetch('/api/ocr', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath, questionText }),
+        body: JSON.stringify({ filePath, fileUrl, questionText }),
       });
       
       if (!res.ok) {
@@ -222,7 +224,7 @@ export default function UploadTab({ teacherId, onSubmissionCreated }: UploadTabP
     }
     const previewUrl = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
     updateEntry(qNum, {
-      file, previewUrl, uploaded: false, filePath: null,
+      file, previewUrl, uploaded: false, filePath: null, fileUrl: null,
       pages: [], flatText: '', confidence: null, ocrLoading: false, error: null, collapsed: false,
     });
 
@@ -231,15 +233,15 @@ export default function UploadTab({ teacherId, onSubmissionCreated }: UploadTabP
 
     setUploading(true);
     try {
-      const filePath = await uploadFile(qNum, file, subId);
-      if (!filePath) { updateEntry(qNum, { error: 'Upload failed — please try again.' }); return; }
-      updateEntry(qNum, { uploaded: true, filePath });
+      const uploadResult = await uploadFile(qNum, file, subId);
+      if (!uploadResult) { updateEntry(qNum, { error: 'Upload failed — please try again.' }); return; }
+      updateEntry(qNum, { uploaded: true, filePath: uploadResult.pathname, fileUrl: uploadResult.url });
       updateEntry(qNum, { ocrLoading: true });
       const entry = fileEntriesRef.current.find(f => f.questionNumber === qNum);
-      const { pages, flatText, confidence } = await runOCR(filePath, entry?.questionText ?? '');
+      const { pages, flatText, confidence } = await runOCR(uploadResult.pathname, uploadResult.url, entry?.questionText ?? '');
       updateEntry(qNum, { pages, flatText, confidence, ocrLoading: false });
       const latest = fileEntriesRef.current.find(f => f.questionNumber === qNum);
-      if (latest?.answerId) await patchAnswer(latest.answerId, filePath, flatText, confidence);
+      if (latest?.answerId) await patchAnswer(latest.answerId, uploadResult.pathname, flatText, confidence);
     } finally {
       setUploading(false);
     }
@@ -255,16 +257,16 @@ export default function UploadTab({ teacherId, onSubmissionCreated }: UploadTabP
     const entry = fileEntriesRef.current.find(f => f.questionNumber === qNum);
     if (entry?.previewUrl) URL.revokeObjectURL(entry.previewUrl);
     updateEntry(qNum, {
-      file: null, previewUrl: null, uploaded: false, filePath: null,
+      file: null, previewUrl: null, uploaded: false, filePath: null, fileUrl: null,
       pages: [], flatText: '', confidence: null, ocrLoading: false, error: null,
     });
   };
 
   const retryOCR = async (qNum: number) => {
     const entry = fileEntriesRef.current.find(f => f.questionNumber === qNum);
-    if (!entry?.filePath) return;
+    if (!entry?.filePath || !entry?.fileUrl) return;
     updateEntry(qNum, { ocrLoading: true, error: null });
-    const { pages, flatText, confidence } = await runOCR(entry.filePath, entry.questionText);
+    const { pages, flatText, confidence } = await runOCR(entry.filePath, entry.fileUrl, entry.questionText);
     updateEntry(qNum, { pages, flatText, confidence, ocrLoading: false });
     if (entry.answerId) await patchAnswer(entry.answerId, entry.filePath, flatText, confidence);
   };

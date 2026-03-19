@@ -124,14 +124,13 @@ RESPOND WITH VALID JSON ONLY (no markdown fences, no preamble):
 // ── Vision OCR for a single image ─────────────────────────────────────────────
 
 async function ocrImage(
-  imagePath: string,
+  imageBuffer: Buffer,
   mimeType:  string,
   questionText?: string,
   pageNum?:      number,
   totalPages?:   number,
 ): Promise<PageExtraction> {
-  const buf    = await readFile(imagePath);
-  const base64 = buf.toString('base64');
+  const base64 = imageBuffer.toString('base64');
   const prompt = buildOCRPrompt(questionText, pageNum, totalPages);
 
   try {
@@ -244,9 +243,10 @@ async function processPDFPage(
     await page.render({ canvasContext: ctx, viewport }).promise;
 
     const imgPath = path.join(tempDir, `p${pageNum}.png`);
-    await writeFile(imgPath, canvas.toBuffer('image/png', { compressionLevel: 1 }));
+    const imgBuffer = canvas.toBuffer('image/png', { compressionLevel: 1 });
+    await writeFile(imgPath, imgBuffer);
 
-    visionExtraction = await ocrImage(imgPath, 'image/png', questionText, pageNum, totalPages);
+    visionExtraction = await ocrImage(imgBuffer, 'image/png', questionText, pageNum, totalPages);
 
     // Clean up immediately to save disk
     try { await rm(imgPath, { force: true }); } catch { /* ignore */ }
@@ -375,23 +375,54 @@ function flattenPages(pages: PageExtraction[]): string {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { filePath, questionText } = body as { filePath?: string; questionText?: string };
+    const { filePath, fileUrl, questionText } = body as { 
+      filePath?: string; 
+      fileUrl?: string;
+      questionText?: string 
+    };
 
-    if (!filePath) {
-      console.error('[OCR] filePath is required');
-      return NextResponse.json({ error: 'filePath is required' }, { status: 400 });
+    // Support both local filePath and remote fileUrl
+    if (!filePath && !fileUrl) {
+      console.error('[OCR] filePath or fileUrl is required');
+      return NextResponse.json({ error: 'filePath or fileUrl is required' }, { status: 400 });
     }
 
-    const fullPath = path.join(process.cwd(), UPLOAD_DIR, filePath);
-
-    try {
-      await access(fullPath, constants.R_OK);
-    } catch {
-      console.error('[OCR] File not found:', fullPath);
-      return NextResponse.json({ error: 'File not found' }, { status: 404 });
+    let fileBuffer: Buffer;
+    let ext: string;
+    
+    if (fileUrl) {
+      // Handle remote URL (Vercel Blob)
+      console.log('[OCR] Downloading file from URL:', fileUrl);
+      try {
+        const response = await fetch(fileUrl);
+        if (!response.ok) {
+          console.error('[OCR] Failed to download file:', response.status);
+          return NextResponse.json({ error: 'Failed to download file' }, { status: 400 });
+        }
+        fileBuffer = Buffer.from(await response.arrayBuffer());
+        
+        // Extract extension from URL or default to jpg
+        const urlPath = new URL(fileUrl).pathname;
+        ext = path.extname(urlPath).replace('.', '').toLowerCase() || 'jpg';
+      } catch (error) {
+        console.error('[OCR] Error downloading file:', error);
+        return NextResponse.json({ error: 'Error downloading file' }, { status: 500 });
+      }
+    } else {
+      // Handle local file path
+      const fullPath = path.join(process.cwd(), UPLOAD_DIR, filePath!);
+      
+      try {
+        await access(fullPath, constants.R_OK);
+      } catch {
+        console.error('[OCR] File not found:', fullPath);
+        return NextResponse.json({ error: 'File not found' }, { status: 404 });
+      }
+      
+      fileBuffer = await readFile(fullPath);
+      ext = path.extname(filePath!).replace('.', '').toLowerCase();
     }
 
-    const ext           = path.extname(filePath).replace('.', '').toLowerCase();
     const supportedExts = ['jpg','jpeg','png','webp','tiff','tif','pdf'];
 
     if (!supportedExts.includes(ext)) {
@@ -412,16 +443,28 @@ export async function POST(request: NextRequest) {
 
     try {
       if (ext === 'pdf') {
-        console.log('[OCR] Processing PDF:', filePath);
-        pages = await processPDF(fullPath, questionText);
+        console.log('[OCR] Processing PDF from buffer');
+        // For PDF, we need to save to temp file first since pdfjs-dist needs a file path
+        const tempId = `ocr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const tempDir = path.join(process.cwd(), TEMP_DIR, tempId);
+        await mkdir(tempDir, { recursive: true });
+        const tempPdfPath = path.join(tempDir, `temp.pdf`);
+        await writeFile(tempPdfPath, fileBuffer);
+        
+        try {
+          pages = await processPDF(tempPdfPath, questionText);
+        } finally {
+          // Clean up temp directory
+          await rm(tempDir, { recursive: true, force: true });
+        }
       } else {
-        console.log('[OCR] Processing image:', filePath);
+        console.log('[OCR] Processing image from buffer');
         const mimeMap: Record<string, string> = {
           jpg: 'image/jpeg', jpeg: 'image/jpeg',
           png: 'image/png',  webp: 'image/webp',
           tiff: 'image/tiff', tif: 'image/tiff',
         };
-        pages = [await ocrImage(fullPath, mimeMap[ext] ?? 'image/jpeg', questionText, 1, 1)];
+        pages = [await ocrImage(fileBuffer, mimeMap[ext] ?? 'image/jpeg', questionText, 1, 1)];
       }
     } catch (processingError) {
       console.error('[OCR] Processing failed:', processingError);

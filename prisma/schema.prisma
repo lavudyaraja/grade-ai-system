@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,7 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Teacher/Examiner who creates exams
 model Teacher {
   id        String   @id @default(cuid())
   name      String
@@ -20,83 +16,94 @@ model Teacher {
   exams     Exam[]
 }
 
-// Exam created by teacher
 model Exam {
-  id          String     @id @default(cuid())
+  id          String       @id @default(cuid())
   title       String
   subject     String
   description String?
   totalMarks  Float
-  status      String     @default("draft") // draft, active, graded
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  status      String       @default("draft")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
   teacherId   String
-  teacher     Teacher    @relation(fields: [teacherId], references: [id])
+  teacher     Teacher      @relation(fields: [teacherId], references: [id])
   questions   Question[]
   submissions Submission[]
 }
 
-// Questions in an exam
 model Question {
   id             String   @id @default(cuid())
   questionNumber Int
   questionText   String
-  modelAnswer    String   // Expected answer
+  modelAnswer    String
   maxMarks       Float
-  keywords       String?  // JSON array of keywords for grading
-  gradingNotes   String?  // Additional grading instructions
+  keywords       String?
+  gradingNotes   String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   examId         String
-  exam           Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
   answers        Answer[]
+  exam           Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
 }
 
-// Student submission for an exam
 model Submission {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   studentName       String
-  studentId         String?  // Roll number or student ID
-  submittedAt       DateTime @default(now())
-  status            String   @default("pending") // pending, processing, graded
-  totalScore        Float?   @default(0)
-  maxScore          Float?   @default(0)
-  percentage        Float?   @default(0)
-  feedback          String?  // Overall feedback
-  reviewStatus      String?  // pending | in_review | reviewed | disputed
+  studentId         String?
+  submittedAt       DateTime  @default(now())
+  status            String    @default("pending")
+  totalScore        Float?    @default(0)
+  maxScore          Float?    @default(0)
+  percentage        Float?    @default(0)
+  feedback          String?
+  reviewStatus      String?
   reviewFinalizedAt DateTime?
-  reviewerNote      String?  // Reviewer's final note
+  reviewerNote      String?
   examId            String
-  exam              Exam     @relation(fields: [examId], references: [id])
   answers           Answer[]
+  exam              Exam      @relation(fields: [examId], references: [id])
 }
 
-// Individual answer from a student
 model Answer {
-  id                   String   @id @default(cuid())
+  id                   String     @id @default(cuid())
   questionNumber       Int
-  handwrittenImagePath String? // Path to uploaded handwritten image
-  recognizedText       String? // Text recognized from handwriting
-  modelAnswer          String? // Copy of model answer for comparison
-  similarityScore      Float?   @default(0) // Semantic similarity (0-1)
-  keywordScore         Float?   @default(0) // Keyword coverage (0-1)
-  finalScore           Float?   @default(0) // Final marks awarded
-  maxMarks             Float    @default(0)
-  feedback             String?  // AI-generated feedback
-  keyPointsFound       String?  // JSON array of matched key points
-  keyPointsMissed      String?  // JSON array of missed key points
-  confidenceLevel      String?  @default("medium") // low, medium, high
-  needsReview          Boolean  @default(false)
+  handwrittenImagePath String?
+  recognizedText       String?
+  modelAnswer          String?
+  similarityScore      Float?     @default(0)
+  keywordScore         Float?     @default(0)
+  finalScore           Float?     @default(0)
+  maxMarks             Float      @default(0)
+  feedback             String?
+  keyPointsFound       String?
+  keyPointsMissed      String?
+  confidenceLevel      String?    @default("medium")
+  needsReview          Boolean    @default(false)
   reviewedAt           DateTime?
   reviewedBy           String?
-  teacherScore         Float?   // Teacher's overridden score
-  teacherComment       String?  // Teacher's comment on the answer
-  reviewDecision       String?  // 'accepted' | 'rejected' | 'disputed' | 'pending'
-  reviewNote           String?  // Internal review note
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  teacherScore         Float?
+  teacherComment       String?
+  reviewDecision       String?
+  reviewNote           String?
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
   questionId           String
-  question             Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
   submissionId         String
+  question             Question   @relation(fields: [questionId], references: [id], onDelete: Cascade)
   submission           Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+}
+
+model UploadedFile {
+  id             String   @id @default(cuid())
+  submissionId   String
+  questionNumber Int
+  fileName       String
+  fileUrl        String
+  mimeType       String
+  fileSize       BigInt
+  blobPathname   String
+  createdAt      DateTime @default(now())
+
+  @@index([submissionId])
+  @@index([questionNumber])
 }

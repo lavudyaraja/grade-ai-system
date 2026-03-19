@@ -139,39 +139,105 @@ export default function ExamsTab({ teacherId, onExamCreated }: ExamsTabProps) {
     setQuestions(prev => prev.map((q, idx) => idx === i ? { ...q, [field]: val } : q));
 
   // ── API calls ─────────────────────────────────────────────────────
-  const handleCreate = async () => {
-    if (!title.trim() || !subject.trim()) return alert('Title and subject are required.');
+  const handleCreate = async (formData?: { title?: string; subject?: string; description?: string; status?: string; questions?: QuestionFormData[] }) => {
+    // Update local state with form data from dialog
+    if (formData) {
+      setTitle(formData.title || '');
+      setSubject(formData.subject || '');
+      setDescription(formData.description || '');
+      setStatus((formData.status as 'draft' | 'active') || 'draft');
+      setQuestions(formData.questions || [EMPTY_QUESTION()]);
+    }
+    
+    // Get the current form values
+    const currentTitle = (formData?.title || title).trim();
+    const currentSubject = (formData?.subject || subject).trim();
+    
+    if (!currentTitle || !currentSubject) {
+      alert('Title and subject are required.');
+      return;
+    }
+    
     setSubmitting(true);
     try {
       const res = await fetch('/api/exams', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title, subject, description, teacherId, status,
-          questions: questions.filter(q => q.questionText && q.modelAnswer),
+          title: currentTitle, 
+          subject: currentSubject, 
+          description: formData?.description || description, 
+          teacherId, 
+          status: formData?.status || status,
+          questions: (formData?.questions || questions).filter(q => q.questionText && q.modelAnswer),
         }),
       });
       if (res.ok) {
-        await fetchExams(); setCreateOpen(false); resetForm(); onExamCreated?.();
-      } else { alert((await res.json()).error ?? 'Failed to create exam'); }
-    } finally { setSubmitting(false); }
+        await fetchExams(); 
+        setCreateOpen(false); 
+        resetForm(); 
+        onExamCreated?.();
+      } else { 
+        const errorData = await res.json().catch(() => ({}));
+        alert(errorData.error ?? 'Failed to create exam'); 
+      }
+    } catch (error) {
+      console.error('Create exam error:', error);
+      alert('Failed to create exam. Please try again.');
+    } finally { 
+      setSubmitting(false); 
+    }
   };
 
-  const handleUpdate = async () => {
-    if (!selectedExam || !title.trim() || !subject.trim()) return;
+  const handleUpdate = async (formData?: { title?: string; subject?: string; description?: string; status?: string; questions?: QuestionFormData[] }) => {
+    if (!selectedExam) return;
+    
+    // Update local state with form data from dialog
+    if (formData) {
+      setTitle(formData.title || '');
+      setSubject(formData.subject || '');
+      setDescription(formData.description || '');
+      setStatus((formData.status as 'draft' | 'active') || 'draft');
+      setQuestions(formData.questions || [EMPTY_QUESTION()]);
+    }
+    
+    const currentTitle = (formData?.title || title).trim();
+    const currentSubject = (formData?.subject || subject).trim();
+    
+    if (!currentTitle || !currentSubject) {
+      alert('Title and subject are required.');
+      return;
+    }
+    
     setSubmitting(true);
     try {
       const res = await fetch(`/api/exams/${selectedExam.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          title, subject, description, status,
-          questions: questions.filter(q => q.questionText && q.modelAnswer),
+          title: currentTitle, 
+          subject: currentSubject, 
+          description: formData?.description || description, 
+          status: formData?.status || status,
+          questions: (formData?.questions || questions).filter(q => q.questionText && q.modelAnswer),
         }),
       });
-      if (res.ok) { await fetchExams(); setEditOpen(false); setSelectedExam(null); resetForm(); }
-      else alert((await res.json()).error ?? 'Failed to update');
-    } finally { setSubmitting(false); }
+      if (res.ok) { 
+        await fetchExams(); 
+        setEditOpen(false); 
+        setSelectedExam(null); 
+        resetForm(); 
+      }
+      else {
+        const errorData = await res.json().catch(() => ({}));
+        alert(errorData.error ?? 'Failed to update exam'); 
+      }
+    } catch (error) {
+      console.error('Update exam error:', error);
+      alert('Failed to update exam. Please try again.');
+    } finally { 
+      setSubmitting(false); 
+    }
   };
 
   const handleDelete = async () => {

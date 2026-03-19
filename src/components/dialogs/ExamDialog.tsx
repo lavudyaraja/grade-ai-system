@@ -40,6 +40,7 @@ export default function ExamDialog({
   onUpdate,
   initialData,
 }: ExamDialogProps) {
+  // Use initialData for create/edit modes, fallback to exam data for edit mode
   const [title, setTitle] = useState(initialData?.title || exam?.title || '');
   const [subject, setSubject] = useState(initialData?.subject || exam?.subject || '');
   const [description, setDescription] = useState(initialData?.description || exam?.description || '');
@@ -54,6 +55,23 @@ export default function ExamDialog({
     }]
   );
 
+  // Sync state when initialData changes (important for create/edit modes)
+  React.useEffect(() => {
+    if (initialData) {
+      setTitle(initialData.title || '');
+      setSubject(initialData.subject || '');
+      setDescription(initialData.description || '');
+      setStatus(initialData.status || 'draft');
+      setQuestions(initialData.questions || [{
+        questionNumber: 1,
+        questionText: '',
+        modelAnswer: '',
+        maxMarks: 5,
+        keywords: [],
+      }]);
+    }
+  }, [initialData]);
+
   const titleText = mode === 'create' ? 'Create New Exam' : mode === 'edit' ? 'Edit Exam' : exam?.title || 'Exam Preview';
   const descriptionText = mode === 'create' 
     ? 'Fill in exam details and add questions with model answers.'
@@ -62,10 +80,12 @@ export default function ExamDialog({
     : exam?.subject || '';
 
   const handleSubmit = () => {
+    // For create and edit modes, we need to pass the current state back to parent
     if (mode === 'create' && onCreate) {
-      onCreate();
+      // Pass current state to parent before calling onCreate
+      (onCreate as any)({ title, subject, description, status, questions });
     } else if (mode === 'edit' && onUpdate) {
-      onUpdate();
+      (onUpdate as any)({ title, subject, description, status, questions });
     }
   };
 
